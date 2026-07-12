@@ -1,0 +1,2117 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AI-powered drone mission planning and execution dashboard.">
+    <title>Drone Mission Pipeline — GCS Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+    /* ══════════ FORCE WHITE-GREEN THEME (cache-busted inline) ══════════ */
+    :root {
+        --bg:           #eef2ee;
+        --bg2:          #e4ebe4;
+        --surface:      #ffffff;
+        --surface2:     #f5f8f5;
+        --border:       #cddacd;
+        --border-2:     #a8c1a8;
+        --green:        #16a34a;
+        --green-d:      #14532d;
+        --green-l:      #dcfce7;
+        --green-glow:   0 0 0 3px rgba(22,163,74,0.15);
+        --text:         #0d1f0d;
+        --text2:        #2d4a2d;
+        --text3:        #5a7a5a;
+        --amber:        #b45309;
+        --amber-l:      #fef3c7;
+        --red:          #b91c1c;
+        --red-l:        #fee2e2;
+        --blue:         #1d4ed8;
+        --blue-l:       #dbeafe;
+        --radius-s:     6px;
+        --radius:       10px;
+        --radius-l:     14px;
+        --shadow-s:     0 1px 4px rgba(0,40,0,0.08);
+        --shadow:       0 3px 12px rgba(0,40,0,0.10);
+        --shadow-l:     0 8px 30px rgba(0,40,0,0.13);
+        --t:            170ms ease;
+    }
+    *, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+    html { font-size:15px; scroll-behavior:smooth; }
+    body { font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; line-height:1.55; }
+    ::-webkit-scrollbar { width:5px; height:5px; }
+    ::-webkit-scrollbar-thumb { background:var(--border-2); border-radius:99px; }
+
+    /* ── HEADER ── */
+    .header {
+        position:sticky; top:0; z-index:200;
+        height:58px; padding:0 28px;
+        background:var(--surface);
+        border-bottom:2.5px solid var(--green);
+        display:flex; align-items:center; justify-content:space-between;
+        box-shadow:0 2px 8px rgba(0,40,0,0.08);
+    }
+    .header-left { display:flex; align-items:center; gap:12px; }
+    .header-logo {
+        width:36px; height:36px; border-radius:8px;
+        background:linear-gradient(135deg,#16a34a,#15803d);
+        display:flex; align-items:center; justify-content:center;
+        font-size:18px; box-shadow:0 2px 8px rgba(22,163,74,0.3);
+        flex-shrink:0;
+    }
+    .header-title { font-size:16px; font-weight:800; color:var(--green-d); letter-spacing:-0.3px; }
+    .header-subtitle { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',monospace; margin-top:1px; }
+    .status-badge {
+        display:flex; align-items:center; gap:7px;
+        padding:5px 14px; border-radius:99px;
+        background:var(--surface2); border:1px solid var(--border);
+        font-size:12px; font-weight:600; color:var(--text2);
+    }
+    .status-dot { width:7px; height:7px; border-radius:50%; background:var(--green); animation:pulse 2s infinite; }
+    .status-dot.error { background:var(--red); }
+    .status-dot.warning { background:var(--amber); }
+    @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.75)} }
+
+    /* ── MAIN GRID ── */
+    .main {
+        max-width:1440px; margin:0 auto; padding:20px 24px;
+        display:grid; grid-template-columns:1fr 1fr; gap:18px;
+    }
+
+    /* ── CARDS ── */
+    .card {
+        background:var(--surface);
+        border:1px solid var(--border);
+        border-radius:var(--radius-l);
+        padding:18px 20px;
+        box-shadow:var(--shadow-s);
+        transition:border-color var(--t), box-shadow var(--t);
+    }
+    .card:hover { border-color:var(--border-2); box-shadow:var(--shadow); }
+    .card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
+    .card-title { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:var(--text2); }
+    .card-title svg { width:15px; height:15px; color:var(--green); }
+    .card-title .icon { font-size:15px; }
+    .card-badge { padding:2px 9px; border-radius:99px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; }
+    .badge-stage1 { background:var(--blue-l); color:var(--blue); }
+    .badge-stage2 { background:var(--amber-l); color:var(--amber); }
+    .badge-stage3 { background:var(--green-l); color:var(--green-d); }
+    .badge-success { background:var(--green-l); color:var(--green-d); }
+    .badge-error   { background:var(--red-l); color:var(--red); }
+
+    /* ── FULL-WIDTH SPANS ── */
+    .prompt-card, .pipeline-flow, .mode-selector, .execute-section { grid-column:1/-1; }
+
+    /* ── PIPELINE ── */
+    .pipeline-flow {
+        display:flex; align-items:center; justify-content:center; gap:0;
+        background:var(--surface); border:1px solid var(--border);
+        border-radius:var(--radius-l); padding:12px 20px;
+        box-shadow:var(--shadow-s);
+    }
+    .pipeline-step {
+        display:flex; align-items:center; gap:7px; padding:7px 16px;
+        border-radius:var(--radius-s); border:1.5px solid var(--border);
+        background:var(--surface2); font-size:12px; font-weight:600; color:var(--text3);
+        transition:all var(--t); cursor:default;
+    }
+    .pipeline-step.active  { border-color:var(--green); background:var(--green-l); color:var(--green-d); box-shadow:var(--green-glow); }
+    .pipeline-step.completed { border-color:var(--green); background:var(--green); color:#fff; }
+    .pipeline-step.error   { border-color:var(--red); background:var(--red-l); color:var(--red); }
+    .pipeline-step-icon { font-size:14px; }
+    .pipeline-step-label { font-size:12px; font-weight:600; }
+    .pipeline-arrow { color:var(--border-2); font-size:14px; padding:0 5px; font-weight:800; }
+    .pipeline-arrow.completed { color:var(--green); }
+
+    /* ── MODE SELECTOR ── */
+    .mode-selector { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-l); padding:14px 18px; box-shadow:var(--shadow-s); }
+    .mode-title { font-size:11px; font-weight:700; color:var(--text3); text-transform:uppercase; letter-spacing:.7px; margin-bottom:10px; }
+    .mode-options { display:flex; flex-wrap:wrap; gap:7px; }
+    .mode-option {
+        display:flex; align-items:center; gap:6px; cursor:pointer;
+        padding:6px 13px; border-radius:var(--radius-s);
+        border:1.5px solid var(--border); background:var(--surface2);
+        font-size:13px; font-weight:500; color:var(--text2);
+        transition:all var(--t); user-select:none;
+    }
+    .mode-option:hover { border-color:var(--green); background:var(--green-l); color:var(--green-d); }
+    .mode-option input[type="radio"] { accent-color:var(--green); }
+    .mode-warning { font-size:12px; color:var(--amber); background:var(--amber-l); border:1px solid #fcd34d; border-radius:var(--radius-s); padding:6px 12px; margin-top:10px; }
+
+    /* ── PROMPT CARD ── */
+    .prompt-card { }
+    .prompt-input-wrapper { display:flex; gap:8px; width:100%; margin-bottom:10px; }
+    .prompt-input {
+        flex:1; padding:11px 15px;
+        background:var(--surface2); border:1.5px solid var(--border);
+        border-radius:var(--radius); color:var(--text);
+        font-family:'Inter',sans-serif; font-size:14px; outline:none;
+        transition:border-color var(--t), box-shadow var(--t);
+    }
+    .prompt-input::placeholder { color:var(--text3); }
+    .prompt-input:focus { border-color:var(--green); box-shadow:var(--green-glow); background:var(--surface); }
+    .submit-btn {
+        padding:0 20px; background:var(--green); color:#fff; border:none;
+        border-radius:var(--radius); font-family:'Inter',sans-serif; font-size:13px; font-weight:700;
+        cursor:pointer; white-space:nowrap; display:flex; align-items:center; gap:7px;
+        box-shadow:0 2px 8px rgba(22,163,74,0.35);
+        transition:background var(--t), transform var(--t), box-shadow var(--t);
+        min-height:44px;
+    }
+    .submit-btn:hover { background:var(--green-d); transform:translateY(-1px); box-shadow:0 5px 16px rgba(22,163,74,0.4); }
+    .submit-btn:disabled { opacity:.4; cursor:not-allowed; transform:none; }
+    .submit-btn svg { width:16px; height:16px; }
+
+    /* ── MIC BTN ── */
+    #micBtn {
+        background:var(--surface2); border:1.5px solid var(--border);
+        border-radius:var(--radius); cursor:pointer; padding:0 14px;
+        font-size:1.1rem; transition:all var(--t); min-width:46px; min-height:44px;
+        display:flex; align-items:center; justify-content:center;
+    }
+    #micBtn:hover { border-color:var(--green); background:var(--green-l); }
+
+    /* ── EXAMPLE CHIPS ── */
+    .examples-row { display:flex; gap:6px; flex-wrap:wrap; margin-top:2px; }
+    .example-chip {
+        padding:4px 11px; background:var(--surface2); border:1px solid var(--border);
+        border-radius:99px; color:var(--text2); font-size:12px; font-weight:500;
+        cursor:pointer; display:flex; align-items:center; gap:4px;
+        transition:all var(--t); white-space:nowrap;
+    }
+    .example-chip:hover { background:var(--green-l); border-color:var(--green); color:var(--green-d); }
+    .example-chip svg { width:12px; height:12px; }
+
+    /* ── JSON VIEWER ── */
+    .json-viewer, textarea.json-viewer {
+        background:#f7fdf7; border:1.5px solid var(--border);
+        border-radius:var(--radius); padding:13px; max-height:370px;
+        overflow-y:auto; font-family:'JetBrains Mono',monospace;
+        font-size:12px; line-height:1.7; white-space:pre-wrap; word-break:break-all;
+        color:var(--text); width:100%; resize:vertical; outline:none;
+        transition:border-color var(--t);
+    }
+    textarea.json-viewer:focus { border-color:var(--green); box-shadow:var(--green-glow); }
+    .json-key    { color:#15803d; font-weight:600; }
+    .json-string { color:#0369a1; }
+    .json-number { color:#92400e; }
+    .json-boolean{ color:#6d28d9; }
+    .json-null   { color:var(--text3); }
+
+    /* ── VALIDATION ── */
+    .validation-list { list-style:none; display:flex; flex-direction:column; gap:6px; }
+    .validation-item {
+        display:flex; align-items:flex-start; gap:8px;
+        padding:8px 12px; border-radius:var(--radius-s);
+        font-size:13px; line-height:1.45;
+        animation:sIn .22s ease forwards;
+    }
+    .validation-item.pass { background:var(--green-l); border:1px solid #86efac; color:var(--green-d); }
+    .validation-item.fail { background:var(--red-l); border:1px solid #fca5a5; color:var(--red); }
+    .validation-item.warn { background:var(--amber-l); border:1px solid #fcd34d; color:var(--amber); }
+    @keyframes sIn { from{opacity:0;transform:translateX(-7px)} to{opacity:1;transform:translateX(0)} }
+
+    /* ── MAP ── */
+    #mapCard { display: flex; flex-direction: column; height: 480px; }
+    .map-container {
+        position:relative; width:100%; flex: 1; min-height: 0;
+        background:#f0f8f0; border:1.5px solid var(--border); border-radius:var(--radius); overflow:hidden;
+    }
+    .map-canvas { width:100%; height:100%; }
+    .map-legend {
+        position:absolute; bottom:10px; left:10px;
+        display:flex; gap:10px; font-size:11px; font-weight:500; color:var(--text2);
+        background:rgba(255,255,255,.88); padding:5px 10px; border-radius:99px;
+        border:1px solid var(--border); backdrop-filter:blur(4px);
+    }
+    .legend-item { display:flex; align-items:center; gap:4px; }
+    .legend-dot  { width:8px; height:8px; border-radius:50%; display: inline-block; flex-shrink: 0; }
+
+    /* ── EXEC LOG ── */
+    #execCard { display: flex; flex-direction: column; height: 480px; }
+    #tabContentLog, #tabContentTelemetry { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    #execContent { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+    .exec-log { display:flex; flex-direction:column; gap:5px; flex: 1; min-height: 0; overflow-y:auto; }
+    .exec-entry {
+        display: grid; grid-template-columns: 55px 24px 145px 1fr; align-items: start; gap: 8px; padding: 6px 10px;
+        border-radius: var(--radius-s); background: var(--surface2); border: 1px solid var(--border);
+        font-size: 11.5px; font-family: 'JetBrains Mono', monospace; animation: fIn .2s ease;
+    }
+    .exec-timestamp { color: var(--text3); text-align: left; }
+    .exec-action    { color: var(--green-d); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .exec-detail    { color: var(--text2); white-space: normal; word-break: break-all; }
+    @keyframes fIn { from{opacity:0} to{opacity:1} }
+
+    /* ── LOG & TELEMETRY TABS ── */
+    .tab-btn {
+        background: none; border: none; border-bottom: 2px solid transparent;
+        color: var(--text3); font-family: 'Inter', sans-serif; font-size: 11.5px; font-weight: 700;
+        text-transform: uppercase; letter-spacing: .7px; padding: 6px 4px; cursor: pointer;
+        display: flex; align-items: center; transition: all var(--t);
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--green); border-bottom-color: var(--green); }
+    
+    /* ── COMPACT TELEMETRY ── */
+    .telemetry-list-compact {
+        display: flex; flex-direction: column; gap: 5px; flex: 1; min-height: 0; overflow-y: auto;
+    }
+    .telemetry-row-compact {
+        display: grid; grid-template-columns: 140px 1fr 40px; align-items: center; gap: 8px; padding: 6px 10px;
+        border-radius: var(--radius-s); background: var(--surface2); border: 1px solid var(--border);
+        font-family: 'JetBrains Mono', monospace; font-size: 11.5px; animation: fIn .2s ease;
+    }
+    .telemetry-label-compact { display: flex; align-items: center; font-weight: 600; color: var(--text2); font-family: 'Inter', sans-serif; }
+    .telemetry-value-compact { font-weight: 700; color: var(--green-d); text-align: right; padding-right: 8px; }
+    .telemetry-unit-compact { color: var(--text3); font-weight: 500; text-align: left; }
+
+    /* ── EXECUTE SECTION ── */
+    .execute-section { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; padding:4px 0; }
+    .execute-btn {
+        padding:11px 32px; background:var(--green); color:#fff; border:none;
+        border-radius:var(--radius); font-family:'Inter',sans-serif; font-size:14px; font-weight:700;
+        cursor:pointer; display:flex; align-items:center; gap:8px;
+        box-shadow:0 2px 10px rgba(22,163,74,0.35);
+        transition:all var(--t);
+    }
+    .execute-btn:hover { background:var(--green-d); transform:translateY(-1px); box-shadow:0 6px 18px rgba(22,163,74,0.4); }
+    .execute-btn:disabled { opacity:.38; cursor:not-allowed; transform:none; box-shadow:none; }
+    .execute-btn svg { width:16px; height:16px; }
+    .action-btn {
+        padding:10px 18px; border-radius:var(--radius); font-family:'Inter',sans-serif;
+        font-size:13px; font-weight:600; cursor:pointer; border:none;
+        display:flex; align-items:center; gap:6px; transition:all var(--t);
+    }
+    .action-btn:hover { filter:brightness(.88); transform:translateY(-1px); }
+    .action-btn svg { width:15px; height:15px; }
+    .reset-btn {
+        padding:10px 18px; background:var(--surface2); color:var(--text2);
+        border:1.5px solid var(--border); border-radius:var(--radius);
+        font-family:'Inter',sans-serif; font-size:13px; font-weight:600; cursor:pointer;
+        display:flex; align-items:center; gap:6px; transition:all var(--t);
+    }
+    .reset-btn:hover { border-color:var(--red); color:var(--red); background:var(--red-l); }
+    .btn-primary {
+        padding:9px 18px; background:var(--green); color:#fff; border:none;
+        border-radius:var(--radius-s); font-family:'Inter',sans-serif;
+        font-size:13px; font-weight:700; cursor:pointer;
+        display:flex; align-items:center; gap:7px;
+        box-shadow:0 2px 8px rgba(22,163,74,0.3);
+        transition:background var(--t);
+    }
+    .btn-primary:hover { background:var(--green-d); }
+    .btn-primary svg { width:14px; height:14px; }
+    .btn-ghost {
+        padding:9px 15px; background:none; color:var(--text2);
+        border:1.5px solid var(--border); border-radius:var(--radius-s);
+        font-family:'Inter',sans-serif; font-size:13px; font-weight:500; cursor:pointer;
+        transition:all var(--t);
+    }
+    .btn-ghost:hover { border-color:var(--border-2); background:var(--bg2); }
+
+    /* ── TELEMETRY ── */
+    .telemetry-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; }
+    .telemetry-item {
+        text-align:center; padding:12px 6px;
+        background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius);
+        transition:border-color var(--t);
+    }
+    .telemetry-item:hover { border-color:var(--green); }
+    .telemetry-value { font-size:22px; font-weight:800; font-family:'JetBrains Mono',monospace; color:var(--green-d); line-height:1.2; }
+    .telemetry-label { font-size:9.5px; color:var(--text3); text-transform:uppercase; letter-spacing:.8px; margin-top:4px; font-weight:700; }
+
+    /* ── SPINNER ── */
+    .spinner { display:inline-block; width:15px; height:15px; border:2px solid rgba(255,255,255,.3); border-top-color:#fff; border-radius:50%; animation:spin .7s linear infinite; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+
+    /* ── EMPTY STATE ── */
+    .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:34px 20px; color:var(--text3); text-align:center; flex: 1; }
+    .empty-state-icon { font-size:34px; margin-bottom:10px; opacity:.35; }
+    .empty-state svg  { color:var(--green); opacity:.3; }
+    .empty-state-text { font-size:13px; }
+
+    /* ── MOVEMENT ── */
+    .movement-section { grid-column:1/-1; background:var(--surface); border:1.5px solid var(--green); border-radius:var(--radius-l); padding:16px; }
+
+    /* ── MODAL ── */
+    #safetyModal {
+        display:none; position:fixed; inset:0; z-index:9999;
+        background:rgba(5,20,5,0.55); backdrop-filter:blur(5px);
+        justify-content:center; align-items:center;
+    }
+    #safetyModal.open { display:flex; }
+    .modal-box {
+        background:var(--surface); border:1.5px solid var(--border);
+        border-radius:16px; width:100%; max-width:520px;
+        box-shadow:var(--shadow-l); overflow:hidden;
+        animation:popIn .2s ease;
+    }
+    @keyframes popIn { from{opacity:0;transform:scale(.96) translateY(8px)} to{opacity:1;transform:scale(1) translateY(0)} }
+    .modal-header { display:flex; align-items:center; justify-content:space-between; padding:17px 22px; border-bottom:1px solid var(--border); background:var(--surface2); }
+    .modal-title  { display:flex; align-items:center; gap:9px; font-size:15px; font-weight:700; color:var(--text); }
+    .modal-title svg { color:var(--green); width:18px; height:18px; }
+    .modal-close  { background:none; border:none; color:var(--text3); font-size:18px; cursor:pointer; width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; transition:background var(--t); }
+    .modal-close:hover { background:var(--bg2); color:var(--text); }
+    .modal-body   { padding:20px 22px; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+    .modal-footer { padding:14px 22px; border-top:1px solid var(--border); background:var(--surface2); display:flex; justify-content:flex-end; gap:10px; }
+    .setting-group label { display:block; font-size:10.5px; font-weight:700; color:var(--text3); text-transform:uppercase; letter-spacing:.6px; margin-bottom:6px; }
+    .setting-group input[type="number"] {
+        width:100%; padding:8px 11px; border:1.5px solid var(--border); border-radius:var(--radius-s);
+        background:var(--surface2); color:var(--text); font-family:'JetBrains Mono',monospace;
+        font-size:13px; outline:none; transition:border-color var(--t), box-shadow var(--t);
+    }
+    .setting-group input[type="number"]:focus { border-color:var(--green); box-shadow:var(--green-glow); background:var(--surface); }
+
+    /* ── API KEY ── */
+    #apiKeyWrapper input {
+        flex:1; padding:8px 12px; border:1.5px solid var(--border); border-radius:var(--radius-s);
+        background:var(--surface2); color:var(--text); font-family:'Inter',sans-serif; font-size:13px; outline:none; transition:border-color var(--t);
+    }
+    #apiKeyWrapper input:focus { border-color:var(--green); }
+
+    /* ── RESPONSIVE ── */
+    @media(max-width:900px) {
+        .main { grid-template-columns:1fr; padding:12px 14px; }
+        .telemetry-grid { grid-template-columns:repeat(3,1fr); }
+        .header { padding:0 14px; }
+    }
+    </style>
+</head>
+
+<body>
+
+    <header class="header">
+        <div class="header-left">
+            <div class="header-logo">🚁</div>
+            <div>
+                <div class="header-title">Drone Mission Pipeline</div>
+                <div class="header-subtitle">Prompt → LLM → Validated JSON → Executor → Gazebo</div>
+            </div>
+        </div>
+        <div class="status-badge" id="statusBadge">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Idle</span>
+        </div>
+    </header>
+
+    <!-- ── Main Content ───────────────────────────── -->
+    <main class="main">
+
+        <!-- Pipeline Flow Indicator -->
+        <div class="pipeline-flow" id="pipelineFlow">
+            <div class="pipeline-step" id="step-prompt" data-step="prompt">
+                <span class="pipeline-step-icon">💬</span>
+                <span class="pipeline-step-label">Prompt</span>
+            </div>
+            <span class="pipeline-arrow" id="arrow-1">→</span>
+            <div class="pipeline-step" id="step-llm" data-step="llm">
+                <span class="pipeline-step-icon">🧠</span>
+                <span class="pipeline-step-label">LLM Plan</span>
+            </div>
+            <span class="pipeline-arrow" id="arrow-2">→</span>
+            <div class="pipeline-step" id="step-validate" data-step="validate">
+                <span class="pipeline-step-icon">🛡️</span>
+                <span class="pipeline-step-label">Validate</span>
+            </div>
+            <span class="pipeline-arrow" id="arrow-3">→</span>
+            <div class="pipeline-step" id="step-execute" data-step="execute">
+                <span class="pipeline-step-icon">🚀</span>
+                <span class="pipeline-step-label">Execute</span>
+            </div>
+            <span class="pipeline-arrow" id="arrow-4">→</span>
+            <div class="pipeline-step" id="step-sim" data-step="sim">
+                <span class="pipeline-step-icon">🎮</span>
+                <span class="pipeline-step-label">Gazebo</span>
+            </div>
+        </div>
+
+        <!-- Mode Selector -->
+        <div class="mode-selector">
+            <div class="mode-title">⚙️ Operating Mode</div>
+            <div class="mode-options">
+                <label class="mode-option">
+                    <input type="radio" name="opMode" value="standard" checked onchange="handleModeChange()">
+                    <span>1. Standard Pipeline</span>
+                </label>
+                <label class="mode-option">
+                    <input type="radio" name="opMode" value="swarm" onchange="handleModeChange()">
+                    <span>2. Multi-agent Formations</span>
+                </label>
+                <div id="swarmDronesSelector" style="display: none; margin-left: 24px; margin-top: 5px; margin-bottom: 10px; align-items: center; gap: 8px;">
+                    <span style="font-size: 0.85rem; color: var(--text-secondary);">Number of Drones:</span>
+                    <select id="swarmDronesSelect" onchange="updateSwarmDronesCount()" style="background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; outline: none; cursor: pointer;">
+                        <option value="2">2 Drones</option>
+                        <option value="3" selected>3 Drones</option>
+                        <option value="4">4 Drones</option>
+                        <option value="5">5 Drones</option>
+                    </select>
+                </div>
+                <label class="mode-option">
+                    <input type="radio" name="opMode" value="slam" onchange="handleModeChange()">
+                    <span>3. SLAM & Navigation</span>
+                </label>
+                <label class="mode-option">
+                    <input type="radio" name="opMode" value="vision" onchange="handleModeChange()">
+                    <span>4. Vision AI Target Follow</span>
+                </label>
+            </div>
+            <div class="mode-warning" id="modeWarning"
+                style="display: none; font-size: 0.85rem; color: var(--accent-amber); margin-top: 10px;">
+                ⚠️ Note: This advanced mode is currently running in mock/headless configuration to save RAM.
+            </div>
+        </div>
+
+        <!-- AI Engine Selector -->
+        <div class="mode-selector" style="margin-top: 15px;">
+            <div class="mode-title">🤖 AI Engine</div>
+            <div class="mode-options">
+                <label class="mode-option">
+                    <input type="radio" name="aiEngine" value="offline" checked onchange="handleEngineChange()">
+                    <span>Offline (Local Ollama)</span>
+                </label>
+                <label class="mode-option">
+                    <input type="radio" name="aiEngine" value="online" onchange="handleEngineChange()">
+                    <span>Online (Gemini 3.5 Flash API)</span>
+                </label>
+            </div>
+            <div id="apiKeyWrapper" style="display: none; margin-top: 10px;">
+                <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
+                    <input type="password" id="apiKeyInput" placeholder="Enter GEMINI_API_KEY here..."
+                        style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1.5px solid var(--border); background-color: var(--surface2); color: var(--text); font-family: 'Inter', sans-serif;">
+                    <button id="apiSaveBtn" onclick="toggleApiKeyEdit()"
+                        style="background-color: var(--green); color: white; border: none; border-radius: 6px; padding: 8px 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; white-space: nowrap; height: 38px;">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Prompt Input Card -->
+        <div class="card prompt-card" style="margin-top: 20px;">
+            <div class="card-header">
+                <div class="card-title">
+                    <i data-lucide="message-square" class="icon"></i>
+                    Operator Command
+                </div>
+            </div>
+            <div class="prompt-input-wrapper" style="display: flex; gap: 8px; width: 100%;">
+                <input type="text" id="promptInput" class="prompt-input" style="flex: 1;"
+                    placeholder="e.g. &quot;Patrol the perimeter loop twice at 15 metres&quot;" autocomplete="off">
+                <button id="micBtn" onclick="toggleSpeech()" title="Voice Input"
+                    style="background: none; border: 1px solid var(--border, #334155); border-radius: 8px; cursor: pointer; padding: 0 16px; font-size: 1.2rem; transition: background 0.2s; min-width: 50px;">
+                    <i data-lucide="mic"></i>
+                </button>
+                <button class="submit-btn" id="submitBtn" onclick="handleSubmit()">
+                    <i data-lucide="brain-circuit"></i> Plan Mission
+                </button>
+            </div>
+            <div class="examples-row" id="examplesRow">
+                <button class="example-chip"
+                    onclick="setExample('Fly and patrol by path of letter P at 12 metres')"><i data-lucide="edit-3" style="width: 14px; height: 14px;"></i> Letter P
+                    path</button>
+                <button class="example-chip"
+                    onclick="setExample('Take off to 10 metres, fly north 20m and east 15m, hover 10 seconds, then land')"><i data-lucide="map-pin" style="width: 14px; height: 14px;"></i> Goto &
+                    hover</button>
+                <button class="example-chip"
+                    onclick="setExample('Fly a square patrol of 25m size at 15 metres altitude, repeat 2 times')"><i data-lucide="repeat" style="width: 14px; height: 14px;"></i> Square
+                    patrol</button>
+                <button class="example-chip"
+                    onclick="setExample('Fly the figure eight inspection pattern at 12 metres')"><i data-lucide="infinity" style="width: 14px; height: 14px;"></i> Figure eight</button>
+                <button class="example-chip"
+                    onclick="setExample('Take off 8m, fly path of letter T, return to launch')"><i data-lucide="type" style="width: 14px; height: 14px;"></i> Letter T
+                    path</button>
+                <button class="example-chip"
+                    onclick="setExample('Take off to 10 metres, hover for 10 seconds, then land')"><i data-lucide="clock" style="width: 14px; height: 14px;"></i> Hover test</button>
+            </div>
+        </div>
+
+
+        <!-- Mission JSON Card -->
+        <div class="card" id="jsonCard">
+            <div class="card-header">
+                <div class="card-title">
+                    <i data-lucide="file-json" class="icon"></i>
+                    Mission JSON
+                </div>
+                <span class="card-badge badge-stage1" id="jsonBadge">Awaiting</span>
+            </div>
+            <div id="jsonContent">
+                <div class="empty-state">
+                    <div class="empty-state-icon"><i data-lucide="file-json" style="width: 48px; height: 48px;"></i></div>
+                    <div class="empty-state-text">Submit a prompt to generate the mission plan</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Validation Card -->
+        <div class="card" id="validationCard" style="display: flex; flex-direction: column;">
+            <div class="card-header">
+                <div class="card-title">
+                    <i data-lucide="shield-check" class="icon"></i>
+                    Validation Results
+                </div>
+                <span class="card-badge badge-stage2" id="validBadge">Awaiting</span>
+            </div>
+            <div id="validationContent" style="flex: 1;">
+                <div class="empty-state">
+                    <div class="empty-state-icon"><i data-lucide="shield-check" style="width: 48px; height: 48px;"></i></div>
+                    <div class="empty-state-text">Mission will be validated after planning</div>
+                </div>
+            </div>
+            
+            <div style="margin-top:14px; border-top:1px solid var(--border); padding-top:12px; display:flex; justify-content:flex-end;">
+                <button onclick="openSafetyModal()" class="btn-ghost" style="font-size:12px; padding:6px 13px;">
+                    <i data-lucide="settings" style="width:13px;height:13px;"></i> Safety Limits
+                </button>
+            </div>
+        </div>
+
+        <!-- Waypoint Map Card -->
+        <div class="card" id="mapCard">
+            <div class="card-header">
+                <div class="card-title">
+                    <i data-lucide="map" class="icon"></i>
+                    Waypoint Map
+                </div>
+                <span class="card-badge badge-stage2">NED Frame</span>
+            </div>
+            <div class="map-container">
+                <canvas id="mapCanvas" class="map-canvas"></canvas>
+                <div class="map-legend">
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #10b981"></span>
+                        Home
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #06b6d4"></span>
+                        Waypoint
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-dot" style="background: #f59e0b"></span>
+                        Path
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution Log Card -->
+        <div class="card" id="execCard" style="display: flex; flex-direction: column;">
+            <div class="card-header" style="margin-bottom: 12px;">
+                <div class="card-title">
+                    <i data-lucide="terminal" class="icon"></i>
+                    Execution Log
+                </div>
+                <span class="card-badge badge-stage3" id="execBadge">Awaiting</span>
+            </div>
+            <div id="execContent" style="flex: 1; display: flex; flex-direction: column; min-height: 0;">
+                <div class="empty-state">
+                    <div class="empty-state-icon"><i data-lucide="terminal" style="width: 48px; height: 48px;"></i></div>
+                    <div class="empty-state-text">Execute the mission to see the command log</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Execute Button Section -->
+        <div class="execute-section">
+            <button class="execute-btn" id="executeBtn" onclick="handleExecute()" disabled>
+                <i data-lucide="rocket"></i> Execute Mission
+            </button>
+            <button class="action-btn" id="holdBtn" onclick="handleHold()"
+                style="background:#d97706; color:white;">
+                <i data-lucide="pause-circle"></i> Hold
+            </button>
+            <button class="action-btn" id="rtlBtn" onclick="handleRTL()"
+                style="background:#2563eb; color:white;">
+                <i data-lucide="home"></i> RTH
+            </button>
+            <button class="action-btn" onclick="handleTerminate()"
+                style="background:#dc2626; color:white;">
+                <i data-lucide="power"></i> Terminate
+            </button>
+        </div>
+
+        <!-- Movement Control Section (Hidden by default) -->
+        <div class="movement-section card prompt-card" id="movementSection"
+            style="display: none; flex-direction: column; align-items: center; gap: 10px; margin-top: 15px; padding: 15px;">
+            <div class="card-title" style="margin-bottom: 5px; font-size: 1rem;">
+                <span class="icon">🕹️</span> Manual Override Controls
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+                <button class="action-btn" onclick="handleArm()"
+                    style="background-color: var(--green); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🟢
+                    Arm</button>
+                <button class="action-btn" onclick="handleDisarm()"
+                    style="background-color: var(--red); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🔴
+                    Disarm</button>
+                <button class="action-btn" onclick="handleMove('up')"
+                    style="background-color: var(--accent-blue); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🔼
+                    Up</button>
+                <button class="action-btn" onclick="handleMove('down')"
+                    style="background-color: var(--accent-blue); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🔽
+                    Down</button>
+                <button class="action-btn" onclick="handleMove('front')"
+                    style="background-color: var(--accent-green); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬆️
+                    Front</button>
+                <button class="action-btn" onclick="handleMove('back')"
+                    style="background-color: var(--accent-green); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬇️
+                    Back</button>
+                <button class="action-btn" onclick="handleMove('left')"
+                    style="background-color: var(--accent-purple); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬅️
+                    Left</button>
+                <button class="action-btn" onclick="handleMove('right')"
+                    style="background-color: var(--accent-purple); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">➡️
+                    Right</button>
+            </div>
+        </div>
+
+        <!-- Live Telemetry Card -->
+        <div class="card" style="grid-column: 1/-1; margin-top: 15px;">
+            <div class="card-header" style="margin-bottom: 12px;">
+                <div class="card-title">
+                    <i data-lucide="radio" class="icon"></i>
+                    Live Telemetry
+                </div>
+                <span class="card-badge badge-stage1" id="telemetryBadge">Disconnected</span>
+            </div>
+            <div id="telemetryDronesContainer">
+                <!-- Dynamically populated by JS based on drone selection -->
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Safety Limits Modal -->
+    <div id="safetyModal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div class="modal-title">
+                    <i data-lucide="shield-check"></i>
+                    Safety Guardrails
+                </div>
+                <button class="modal-close" onclick="closeSafetyModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label>Max Battery Time (sec)</label>
+                    <input type="number" id="cfg_max_flight_time_s" value="900">
+                </div>
+                <div class="setting-group">
+                    <label>Max VLOS Leg (m)</label>
+                    <input type="number" id="cfg_max_leg_distance_m" value="500">
+                </div>
+                <div class="setting-group">
+                    <label>Min Waypoint Spacing (m)</label>
+                    <input type="number" id="cfg_min_waypoint_spacing_m" step="0.1" value="1.0">
+                </div>
+                <div class="setting-group">
+                    <label>Geofence Radius (m)</label>
+                    <input type="number" id="cfg_geofence_radius_m" value="200">
+                </div>
+                <div class="setting-group">
+                    <label>Max Altitude (m)</label>
+                    <input type="number" id="cfg_max_altitude_m" value="50">
+                </div>
+                <div class="setting-group">
+                    <label>Max Speed (m/s)</label>
+                    <input type="number" id="cfg_max_speed_mps" value="15">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-ghost" onclick="closeSafetyModal()">Cancel</button>
+                <button class="btn-primary" onclick="saveSafetyLimits()">
+                    <i data-lucide="save"></i> Save &amp; Apply
+                </button>
+            </div>
+        </div>
+    </div>
+
+
+    <script>
+        // ═══════════════════════════════════════════════════════════
+        // Drone Mission Pipeline — Frontend Logic
+        // ═══════════════════════════════════════════════════════════
+
+        const API = '';  // Same origin
+        let currentMission = null;
+        let isValidated = false;
+
+        // ── Example prompts ──
+        function setExample(text) {
+            document.getElementById('promptInput').value = text;
+            document.getElementById('promptInput').focus();
+        }
+
+        // ── Mode Handling ──
+        const modeExamples = {
+            standard: [
+                { text: "Patrol the perimeter loop twice at 15 metres altitude", label: "🔄 Perimeter patrol" },
+                { text: "Fly the figure eight inspection pattern at 12 metres", label: "<i data-lucide='infinity' style='width: 14px; height: 14px;'></i> Figure eight" },
+                { text: "Take off to 10 metres, hover for 10 seconds, then land", label: "<i data-lucide='clock' style='width: 14px; height: 14px;'></i> Hover test" },
+                { text: "Execute the linear sweep at 8 metres altitude and 3 m/s", label: "📐 Linear sweep" },
+                { text: "Fly to 20 metres, do a square pattern 3 times, return to launch", label: "<i data-lucide='repeat' style='width: 14px; height: 14px;'></i> Multi-loop" }
+            ],
+            swarm: [
+                { text: "Three drones takeoff to 15m and fly north 40m in wedge formation.", label: "📐 Wedge Formation" },
+                { text: "Plan a line formation swarm sweep to east 50m at 12m altitude.", label: "↕️ Line Sweep" },
+                { text: "Fly 3 drones in column formation north 30m and east 30m, then land.", label: "➡️ Column Patrol" },
+                { text: "Wedge formation takeoff to 10m, loiter 10 seconds, then return to launch.", label: "<i data-lucide='clock' style='width: 14px; height: 14px;'></i> Swarm Hover" },
+                { text: "Three drones in wedge: fly north 35m, east 15m, return home.", label: "🏠 Wedge Home" }
+            ],
+            slam: [
+                { text: "Explore the unknown building autonomously.", label: "🗺️ Build Explore" },
+                { text: "Plan autonomous SLAM mapping of the room within 30 meters bounds.", label: "🛢️ Room Map" },
+                { text: "Map the area from north -40m to 40m and east -40m to 40m for 100 seconds.", label: "🧭 Custom Bounds" },
+                { text: "Explore the courtyard, setting boundaries of 50m around home.", label: "⛲ Courtyard SLAM" },
+                { text: "Map the surrounding terrain up to 35m boundary for 60s.", label: "⛰️ Terrain Map" }
+            ],
+            vision: [
+                { text: "Find the red car and follow it.", label: "🚗 Red Car Follow" },
+                { text: "Track the person moving at north 20m and east 20m.", label: "🚶 Track Person" },
+                { text: "Find the red_box target class and follow it for 60 seconds.", label: "📦 Red Box Track" },
+                { text: "Search for the blue truck and track it.", label: "🚚 Blue Truck" },
+                { text: "Fly to north 10m, search for the target person and follow them.", label: "🔍 Search & Follow" }
+            ]
+        };
+
+        function handleModeChange() {
+            const mode = document.querySelector('input[name="opMode"]:checked').value;
+            const warning = document.getElementById('modeWarning');
+            const input = document.getElementById('promptInput');
+
+            const swarmSelector = document.getElementById('swarmDronesSelector');
+            let numDrones = 1;
+            if (mode === 'standard') {
+                warning.style.display = 'none';
+                if (swarmSelector) swarmSelector.style.display = 'none';
+                input.placeholder = 'e.g. "Patrol the perimeter loop twice at 15 metres"';
+            } else if (mode === 'swarm') {
+                warning.style.display = 'block';
+                if (swarmSelector) swarmSelector.style.display = 'flex';
+                input.placeholder = 'e.g. "Three drones sweep this area in a wedge formation"';
+                const select = document.getElementById('swarmDronesSelect');
+                numDrones = select ? parseInt(select.value) : 3;
+            } else if (mode === 'slam') {
+                warning.style.display = 'block';
+                if (swarmSelector) swarmSelector.style.display = 'none';
+                input.placeholder = 'e.g. "Explore the unknown building autonomously"';
+            } else if (mode === 'vision') {
+                warning.style.display = 'block';
+                if (swarmSelector) swarmSelector.style.display = 'none';
+                input.placeholder = 'e.g. "Find the red car and follow it"';
+            }
+
+            // Dynamically update example chips
+            const row = document.getElementById('examplesRow');
+            if (row && modeExamples[mode]) {
+                row.innerHTML = modeExamples[mode].map(item => {
+                    const escapedText = item.text.replace(/'/g, "\\'");
+                    return `<button class="example-chip" onclick="setExample('${escapedText}')">${item.label}</button>`;
+                }).join('');
+            }
+            renderTelemetryLayout(numDrones);
+        }
+
+        function renderTelemetryLayout(numDrones) {
+            const container = document.getElementById('telemetryDronesContainer');
+            if (!container) return;
+            
+            let html = '';
+            const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+            const isSwarm = (currentMode === 'swarm');
+            const limit = isSwarm ? numDrones : 1;
+            
+            for (let i = 0; i < limit; i++) {
+                const title = isSwarm ? (i === 0 ? "🛸 Drone 1 (Leader)" : `🛸 Drone ${i + 1} (Wingman)`) : "🛸 Drone Telemetry";
+                html += `
+                    <div class="drone-telemetry-section" style="${i > 0 ? 'margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;' : ''}">
+                        <div style="font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; color: var(--accent-blue); display: flex; align-items: center; gap: 6px;">
+                            <span>${title}</span>
+                            <span id="telConn_${i}" class="card-badge" style="font-size: 0.7rem; padding: 2px 6px;">Disconnected</span>
+                        </div>
+                        <div class="telemetry-grid">
+                            <div class="telemetry-item">
+                                <div class="telemetry-value" id="telAlt_${i}">--</div>
+                                <div class="telemetry-label"><i data-lucide="arrow-up-right" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Altitude (m)</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-value" id="telSpeed_${i}">--</div>
+                                <div class="telemetry-label"><i data-lucide="gauge" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Speed (m/s)</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-value" id="telHeading_${i}">--</div>
+                                <div class="telemetry-label"><i data-lucide="compass" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Heading (°)</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-value" id="telBat_${i}">--</div>
+                                <div class="telemetry-label"><i data-lucide="battery" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Battery (%)</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-value" id="telLat_${i}">--</div>
+                                <div class="telemetry-label"><i data-lucide="map-pin" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Latitude</div>
+                            </div>
+                            <div class="telemetry-item">
+                                <div class="telemetry-value" id="telLon_${i}">--</div>
+                                <div class="telemetry-label"><i data-lucide="map-pin" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Longitude</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+            if (window.lucide) {
+                lucide.createIcons();
+            }
+        }
+
+        function updateSwarmDronesCount() {
+            const select = document.getElementById('swarmDronesSelect');
+            if (select) {
+                const val = parseInt(select.value);
+                renderTelemetryLayout(val);
+            }
+        }
+
+        function initApiKey() {
+            const savedKey = localStorage.getItem('gemini_api_key');
+            const input = document.getElementById('apiKeyInput');
+            const btn = document.getElementById('apiSaveBtn');
+            if (!input || !btn) return;
+            if (savedKey) {
+                input.value = savedKey;
+                input.disabled = true;
+                btn.textContent = 'Edit';
+                btn.style.backgroundColor = 'var(--border)';
+                btn.style.color = 'var(--text)';
+            } else {
+                input.disabled = false;
+                btn.textContent = 'Save';
+                btn.style.backgroundColor = 'var(--green)';
+                btn.style.color = 'white';
+            }
+        }
+
+        function toggleApiKeyEdit() {
+            const input = document.getElementById('apiKeyInput');
+            const btn = document.getElementById('apiSaveBtn');
+            if (!input || !btn) return;
+            if (input.disabled) {
+                input.disabled = false;
+                input.focus();
+                btn.textContent = 'Save';
+                btn.style.backgroundColor = 'var(--green)';
+                btn.style.color = 'white';
+            } else {
+                const key = input.value.trim();
+                if (key) {
+                    localStorage.setItem('gemini_api_key', key);
+                    input.disabled = true;
+                    btn.textContent = 'Edit';
+                    btn.style.backgroundColor = 'var(--border)';
+                    btn.style.color = 'var(--text)';
+                } else {
+                    localStorage.removeItem('gemini_api_key');
+                    input.disabled = false;
+                    btn.textContent = 'Save';
+                    btn.style.backgroundColor = 'var(--green)';
+                    btn.style.color = 'white';
+                }
+            }
+        }
+
+        function updateMovementSection(isConnected, status) {
+            const movementSection = document.getElementById('movementSection');
+            if (!movementSection) return;
+
+            if (isConnected && status !== 'executing') {
+                movementSection.style.display = 'flex';
+                const buttons = movementSection.querySelectorAll('button');
+                buttons.forEach(btn => {
+                    btn.disabled = false;
+                    btn.style.opacity = '1';
+                    btn.style.cursor = 'pointer';
+                });
+            } else {
+                movementSection.style.display = 'none';
+                const buttons = movementSection.querySelectorAll('button');
+                buttons.forEach(btn => {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    btn.style.cursor = 'not-allowed';
+                });
+            }
+        }
+
+        function handleEngineChange() {
+            const engine = document.querySelector('input[name="aiEngine"]:checked').value;
+            const keyWrapper = document.getElementById('apiKeyWrapper');
+            if (engine === 'online') {
+                keyWrapper.style.display = 'block';
+                initApiKey();
+            } else {
+                keyWrapper.style.display = 'none';
+            }
+        }
+
+        // ── Submit: Plan + Validate ──
+        async function handleSubmit() {
+            const prompt = document.getElementById('promptInput').value.trim();
+            if (!prompt) return;
+
+            const btn = document.getElementById('submitBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Planning...';
+
+            setStatus('planning', 'Planning...');
+            setPipelineStep('llm', 'active');
+
+            const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+            const currentEngine = document.querySelector('input[name="aiEngine"]:checked').value;
+            const apiKey = document.getElementById('apiKeyInput').value.trim() || localStorage.getItem('gemini_api_key') || '';
+            const swarmSelect = document.getElementById('swarmDronesSelect');
+            const numDrones = swarmSelect ? parseInt(swarmSelect.value) : 3;
+
+            try {
+                const res = await fetch(`${API}/api/plan-validate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt, mode: currentMode, ai_engine: currentEngine, api_key: apiKey, num_drones: numDrones }),
+                });
+
+                const data = await res.json();
+
+                if (!res.ok || data.success === false || data.error) {
+                    throw new Error(data.error || `Server error: ${res.status}`);
+                }
+
+                if (data.mission) {
+                    currentMission = data.mission;
+                    displayMissionJSON(data.mission);
+                    setPipelineStep('llm', 'completed');
+                }
+
+                if (data.validation) {
+                    displayValidation(data.validation);
+                    if (data.validation.valid) {
+                        isValidated = true;
+                        document.getElementById('executeBtn').disabled = false;
+                        setPipelineStep('validate', 'completed');
+                        setStatus('validated', 'Mission Validated ✓');
+                    } else {
+                        setPipelineStep('validate', 'error');
+                        setStatus('error', 'Validation Failed');
+                    }
+                }
+
+                // Draw waypoints on map
+                if (data.mission) {
+                    drawWaypointMap(data.mission);
+                }
+
+            } catch (err) {
+                setStatus('error', `Error: ${err.message}`);
+                setPipelineStep('llm', 'error');
+            }
+
+            btn.disabled = false;
+            btn.innerHTML = '<i data-lucide="brain-circuit"></i> Plan Mission';
+        }
+
+        // ── Execute Mission ──
+        async function handleExecute() {
+            const editor = document.getElementById('missionJsonEditor');
+            if (editor) {
+                try {
+                    currentMission = JSON.parse(editor.value);
+                } catch (e) {
+                    alert('Cannot execute: Invalid JSON syntax');
+                    return;
+                }
+            }
+            if (!currentMission || !isValidated) return;
+
+            const btn = document.getElementById('executeBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Executing...';
+
+            setStatus('executing', 'Executing Mission...');
+            setPipelineStep('execute', 'active');
+            setPipelineStep('sim', 'active');
+
+            const holdBtn = document.getElementById('holdBtn');
+            if (holdBtn) {
+                holdBtn.innerHTML = '<i data-lucide="pause-circle"></i> Hold';
+                holdBtn.style.backgroundColor = 'var(--accent-amber)';
+                holdBtn.style.borderColor = 'var(--accent-amber)';
+            }
+
+            try {
+                const res = await fetch(`${API}/api/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mission: currentMission }),
+                });
+
+                const data = await res.json();
+
+                if (!data.success) {
+                    displayExecLog([{ action: 'error', status: 'error', details: { message: data.error } }]);
+                    setPipelineStep('execute', 'error');
+                    setStatus('error', `Failed: ${data.error}`);
+                    btn.disabled = false;
+                    btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                }
+            } catch (err) {
+                setStatus('error', `Execution error: ${err.message}`);
+                setPipelineStep('execute', 'error');
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+            }
+        }
+
+        // ── Terminate Mission ──
+        async function handleTerminate() {
+            setStatus('executing', 'Terminating...');
+            try {
+                await fetch(`${API}/api/terminate`, { method: 'POST' });
+            } catch (err) {
+                console.error("Terminate failed:", err);
+            }
+            // Also run local reset to clear UI
+            resetPipeline();
+        }
+
+        let isHolding = false;
+
+        // ── Live Hold Action ──
+        async function handleHold() {
+            const btn = document.getElementById('holdBtn');
+            try {
+                const res = await fetch(`${API}/api/action/hold`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) {
+                    console.error("Hold failed:", data.error);
+                    setStatus('error', `Error: ${data.error}`);
+                } else {
+                    isHolding = !isHolding;
+                    if (isHolding) {
+                        btn.innerHTML = '▶️ Resume';
+                        btn.style.backgroundColor = 'var(--accent-green)';
+                        btn.style.borderColor = 'var(--accent-green)';
+                        setStatus('executing', 'Holding...');
+                    } else {
+                        btn.innerHTML = '<i data-lucide="pause-circle"></i> Hold';
+                        btn.style.backgroundColor = 'var(--accent-amber)';
+                        btn.style.borderColor = 'var(--accent-amber)';
+                        setStatus('executing', 'Executing Mission...');
+                    }
+                }
+            } catch (err) {
+                console.error("Hold failed:", err);
+            }
+        }
+
+        // ── Live Arm Action ──
+        async function handleArm() {
+            setStatus('executing', 'Arming drone...');
+            try {
+                const res = await fetch(`${API}/api/action/arm`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) {
+                    console.error("Arm failed:", data.error);
+                    setStatus('error', `Arm Error: ${data.error}`);
+                }
+            } catch (err) {
+                console.error("Arm failed:", err);
+            }
+        }
+
+        // ── Live Disarm Action ──
+        async function handleDisarm() {
+            setStatus('executing', 'Disarming drone...');
+            try {
+                const res = await fetch(`${API}/api/action/disarm`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) {
+                    console.error("Disarm failed:", data.error);
+                    setStatus('error', `Disarm Error: ${data.error}`);
+                }
+            } catch (err) {
+                console.error("Disarm failed:", err);
+            }
+        }
+
+        // ── Live Movement Action ──
+        async function handleMove(direction) {
+            try {
+                const res = await fetch(`${API}/api/action/move`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ direction: direction, distance: 5.0 })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    console.error("Move failed:", data.error);
+                    setStatus('error', `Move Error: ${data.error}`);
+                }
+            } catch (err) {
+                console.error("Move request failed:", err);
+            }
+        }
+
+        // ── Live RTL Action ──
+        async function handleRTL() {
+            setStatus('executing', 'Returning to Launch...');
+            try {
+                const res = await fetch(`${API}/api/action/rtl`, { method: 'POST' });
+                const data = await res.json();
+                if (!data.success) {
+                    console.error("RTL failed:", data.error);
+                    setStatus('error', `RTL Error: ${data.error}`);
+                }
+            } catch (err) {
+                console.error("RTL failed:", err);
+            }
+        }
+
+        // ── Display Mission JSON ──
+        function displayMissionJSON(mission) {
+            const container = document.getElementById('jsonContent');
+            const jsonString = JSON.stringify(mission, null, 2);
+            container.innerHTML = `
+                <textarea id="missionJsonEditor" spellcheck="false" style="width: 100%; height: 350px; font-family: monospace; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 12px; font-size: 14px;">${escapeHtml(jsonString)}</textarea>
+                <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+                    <button onclick="revalidateMission()" style="background-color: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s;">🔄 Update & Re-validate</button>
+                </div>
+            `;
+            document.getElementById('jsonBadge').textContent = 'Editable';
+            document.getElementById('jsonBadge').className = 'card-badge badge-success';
+        }
+
+        async function revalidateMission() {
+            const editor = document.getElementById('missionJsonEditor');
+            let editedMission;
+            try {
+                editedMission = JSON.parse(editor.value);
+            } catch (err) {
+                setStatus('error', 'Invalid JSON syntax');
+                alert('Invalid JSON syntax: ' + err.message);
+                return;
+            }
+
+            try {
+                const res = await fetch(`${API}/api/validate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mission: editedMission }),
+                });
+                const data = await res.json();
+                
+                if (data.valid !== undefined) {
+                    displayValidation(data);
+                    if (data.valid) {
+                        currentMission = editedMission; // Update current mission!
+                        isValidated = true;
+                        document.getElementById('executeBtn').disabled = false;
+                        setPipelineStep('validate', 'completed');
+                        setStatus('validated', 'Edited Mission Validated ✓');
+                        drawWaypointMap(editedMission); // Update the map
+                    } else {
+                        isValidated = false;
+                        document.getElementById('executeBtn').disabled = true;
+                        setPipelineStep('validate', 'error');
+                        setStatus('error', 'Validation Failed');
+                    }
+                }
+            } catch (err) {
+                setStatus('error', 'Validation error: ' + err.message);
+            }
+        }
+
+        // ── Display Validation Results ──
+        function displayValidation(result) {
+            const container = document.getElementById('validationContent');
+            let html = '<ul class="validation-list">';
+
+            if (result.valid && result.errors.length === 0) {
+                html += `
+                <li class="validation-item pass">✅ Schema validation passed</li>
+                <li class="validation-item pass">✅ Safety limits check passed</li>
+                <li class="validation-item pass">✅ Mission structure valid</li>
+                <li class="validation-item pass">✅ Geofence check passed</li>
+            `;
+            }
+
+            result.errors.forEach(err => {
+                html += `<li class="validation-item fail">❌ ${escapeHtml(err)}</li>`;
+            });
+
+            result.warnings.forEach(warn => {
+                html += `<li class="validation-item warn">⚠️ ${escapeHtml(warn)}</li>`;
+            });
+
+            html += '</ul>';
+            container.innerHTML = html;
+
+            const badge = document.getElementById('validBadge');
+            if (result.valid) {
+                badge.textContent = 'Passed';
+                badge.className = 'card-badge badge-success';
+            } else {
+                badge.textContent = 'Failed';
+                badge.className = 'card-badge badge-error';
+            }
+        }
+
+        // ── Display Execution Log ──
+        function displayExecLog(entries) {
+            const container = document.getElementById('execContent');
+            let html = '<div class="exec-log">';
+
+            entries.forEach(entry => {
+                const time = entry.elapsed_s !== undefined && entry.elapsed_s !== 0.0 ? `${entry.elapsed_s.toFixed(1)}s` : '--';
+                let icon = '✅';
+                if (entry.status === 'error') {
+                    icon = '❌';
+                } else if (entry.status === 'warning') {
+                    icon = '⚠️';
+                } else if (entry.action === 'drone_telemetry') {
+                    icon = '⚙️';
+                }
+                
+                let detailsText = '';
+                if (entry.details) {
+                    if (typeof entry.details === 'object') {
+                        detailsText = entry.details.message || JSON.stringify(entry.details);
+                    } else {
+                        detailsText = String(entry.details);
+                    }
+                }
+
+                const actionDisplay = entry.action === 'drone_telemetry' ? 'telemetry' : entry.action;
+
+                html += `
+                <div class="exec-entry">
+                    <span class="exec-timestamp">${time}</span>
+                    <span>${icon}</span>
+                    <span class="exec-action">${escapeHtml(actionDisplay)}</span>
+                    <span class="exec-detail">${escapeHtml(detailsText)}</span>
+                </div>
+            `;
+            });
+
+            html += '</div>';
+            container.innerHTML = html;
+            
+            // Scroll to the bottom of the log
+            const logDiv = container.querySelector('.exec-log');
+            if (logDiv) {
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+        }
+
+        // ── Draw Waypoint Map ──
+        function drawWaypointMap(mission) {
+            const canvas = document.getElementById('mapCanvas');
+            const ctx = canvas.getContext('2d');
+
+            // Set canvas size
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * window.devicePixelRatio;
+            canvas.height = rect.height * window.devicePixelRatio;
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+            const w = rect.width;
+            const h = rect.height;
+
+            // Clear
+            ctx.clearRect(0, 0, w, h);
+
+            if (!mission || !mission.actions) {
+                ctx.fillStyle = '#64748b';
+                ctx.font = '14px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText('No mission loaded', w / 2, h / 2);
+                return;
+            }
+
+            // Extract goto waypoints
+            const waypoints = mission.actions
+                .filter(a => a.type === 'goto')
+                .map(a => ({ n: Number(a.params.north_m) || 0, e: Number(a.params.east_m) || 0 }));
+
+            // Define formation offsets for swarm if applicable
+            const formationOffsets = {
+                wedge: [[0, 0], [-5, -5], [-5, 5]],
+                line: [[0, 0], [0, -5], [0, 5]],
+                column: [[0, 0], [-5, 0], [-10, 0]]
+            };
+            const formationName = (mission.formation || 'wedge').toLowerCase();
+            const offsets = formationOffsets[formationName] || formationOffsets.wedge;
+
+            // Gather all points that must fit in bounds
+            let boundsN = [0];
+            let boundsE = [0];
+
+            if (mission.explore_area) {
+                const area = mission.explore_area;
+                if (area.min_n !== undefined) boundsN.push(Number(area.min_n));
+                if (area.max_n !== undefined) boundsN.push(Number(area.max_n));
+                if (area.min_e !== undefined) boundsE.push(Number(area.min_e));
+                if (area.max_e !== undefined) boundsE.push(Number(area.max_e));
+            }
+
+            waypoints.forEach(wp => {
+                boundsN.push(wp.n);
+                boundsE.push(wp.e);
+
+                if (mission.vehicle_type === 'swarm') {
+                    const heading_rad = Math.atan2(wp.e, wp.n);
+                    const cos_h = Math.cos(heading_rad);
+                    const sin_h = Math.sin(heading_rad);
+                    offsets.forEach(([dx, dy]) => {
+                        const rotated_n = dx * cos_h - dy * sin_h;
+                        const rotated_e = dx * sin_h + dy * cos_h;
+                        boundsN.push(wp.n + rotated_n);
+                        boundsE.push(wp.e + rotated_e);
+                    });
+                }
+            });
+
+            // Find bounds with padding
+            const minN = Math.min(...boundsN) - 15;
+            const maxN = Math.max(...boundsN) + 15;
+            const minE = Math.min(...boundsE) - 15;
+            const maxE = Math.max(...boundsE) + 15;
+
+            const rangeN = maxN - minN || 1;
+            const rangeE = maxE - minE || 1;
+
+            // Scale to fit canvas, leaving 30px padding on edges
+            const scale = Math.min((w - 60) / rangeE, (h - 60) / rangeN);
+
+            function toCanvas(n, e) {
+                const cx = (e - minE) * scale + 30;
+                const cy = (maxN - n) * scale + 30;  // Flip N axis
+                return [cx, cy];
+            }
+
+            // Draw grid
+            ctx.strokeStyle = 'rgba(148, 163, 184, 0.08)';
+            ctx.lineWidth = 1;
+            // Determine grid interval based on range
+            const maxRange = Math.max(rangeN, rangeE);
+            const gridStep = maxRange > 200 ? 50 : (maxRange > 80 ? 20 : 10);
+
+            for (let i = Math.ceil(minN / gridStep) * gridStep; i <= maxN; i += gridStep) {
+                const [, y] = toCanvas(i, 0);
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+            }
+            for (let i = Math.ceil(minE / gridStep) * gridStep; i <= maxE; i += gridStep) {
+                const [x,] = toCanvas(0, i);
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+            }
+
+            // Draw explore area if present
+            if (mission.explore_area) {
+                const area = mission.explore_area;
+                const min_n = Number(area.min_n) || -50;
+                const max_n = Number(area.max_n) || 50;
+                const min_e = Number(area.min_e) || -50;
+                const max_e = Number(area.max_e) || 50;
+
+                const [x1, y1] = toCanvas(max_n, min_e);
+                const [x2, y2] = toCanvas(min_n, max_e);
+
+                ctx.save();
+                ctx.fillStyle = 'rgba(6, 182, 212, 0.03)';
+                ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+
+                ctx.strokeStyle = 'rgba(6, 182, 212, 0.3)';
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([4, 4]);
+                ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+                ctx.restore();
+
+                ctx.fillStyle = 'rgba(6, 182, 212, 0.7)';
+                ctx.font = '10px Inter';
+                ctx.textAlign = 'left';
+                ctx.fillText('Exploration Bounds', x1 + 8, y1 + 16);
+            }
+
+            // Draw Swarm Paths or Standard Path
+            if (mission.vehicle_type === 'swarm' && waypoints.length > 0) {
+                offsets.forEach(([dx, dy], droneIdx) => {
+                    const colors = [
+                        { path: 'rgba(6, 182, 212, 0.5)', dot: '#06b6d4', label: 'D1' }, // Leader
+                        { path: 'rgba(139, 92, 246, 0.5)', dot: '#8b5cf6', label: 'D2' }, // Wingman 1
+                        { path: 'rgba(236, 72, 153, 0.5)', dot: '#ec4899', label: 'D3' }  // Wingman 2
+                    ];
+                    const col = colors[droneIdx] || colors[0];
+
+                    ctx.save();
+                    ctx.strokeStyle = col.path;
+                    ctx.lineWidth = droneIdx === 0 ? 2 : 1.5;
+                    if (droneIdx > 0) ctx.setLineDash([4, 4]);
+
+                    ctx.beginPath();
+                    const [start_x, start_y] = toCanvas(dx, dy); // at home
+                    ctx.moveTo(start_x, start_y);
+
+                    waypoints.forEach(wp => {
+                        const heading_rad = Math.atan2(wp.e, wp.n);
+                        const cos_h = Math.cos(heading_rad);
+                        const sin_h = Math.sin(heading_rad);
+                        const rotated_n = dx * cos_h - dy * sin_h;
+                        const rotated_e = dx * sin_h + dy * cos_h;
+
+                        const [x, y] = toCanvas(wp.n + rotated_n, wp.e + rotated_e);
+                        ctx.lineTo(x, y);
+                    });
+
+                    if (mission.repeat_count > 1 && waypoints.length > 1) {
+                        const wp0 = waypoints[0];
+                        const heading_rad = Math.atan2(wp0.e, wp0.n);
+                        const cos_h = Math.cos(heading_rad);
+                        const sin_h = Math.sin(heading_rad);
+                        const rotated_n = dx * cos_h - dy * sin_h;
+                        const rotated_e = dx * sin_h + dy * cos_h;
+                        const [fx, fy] = toCanvas(wp0.n + rotated_n, wp0.e + rotated_e);
+                        ctx.lineTo(fx, fy);
+                    }
+                    ctx.stroke();
+                    ctx.restore();
+
+                    // Draw waypoints
+                    waypoints.forEach((wp, wpIdx) => {
+                        const heading_rad = Math.atan2(wp.e, wp.n);
+                        const cos_h = Math.cos(heading_rad);
+                        const sin_h = Math.sin(heading_rad);
+                        const rotated_n = dx * cos_h - dy * sin_h;
+                        const rotated_e = dx * sin_h + dy * cos_h;
+
+                        const [x, y] = toCanvas(wp.n + rotated_n, wp.e + rotated_e);
+
+                        // Outer glow
+                        ctx.fillStyle = col.path;
+                        ctx.beginPath();
+                        ctx.arc(x, y, droneIdx === 0 ? 10 : 7, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Inner dot
+                        ctx.fillStyle = col.dot;
+                        ctx.beginPath();
+                        ctx.arc(x, y, droneIdx === 0 ? 5 : 3.5, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        // Label only leader waypoints
+                        if (droneIdx === 0 && waypoints.length <= 10) {
+                            ctx.fillStyle = '#94a3b8';
+                            ctx.font = '9px JetBrains Mono';
+                            ctx.textAlign = 'center';
+                            ctx.fillText(`WP${wpIdx + 1}`, x, y - 14);
+                        }
+                    });
+                });
+            } else if (waypoints.length > 0) {
+                // Draw standard path
+                ctx.save();
+                ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                const [hx, hy] = toCanvas(0, 0);
+                ctx.moveTo(hx, hy);
+                waypoints.forEach(wp => {
+                    const [x, y] = toCanvas(wp.n, wp.e);
+                    ctx.lineTo(x, y);
+                });
+                if (mission.repeat_count > 1 && waypoints.length > 1) {
+                    const [fx, fy] = toCanvas(waypoints[0].n, waypoints[0].e);
+                    ctx.lineTo(fx, fy);
+                }
+                ctx.stroke();
+                ctx.restore();
+
+                // Draw waypoints
+                waypoints.forEach((wp, i) => {
+                    const [x, y] = toCanvas(wp.n, wp.e);
+
+                    // Outer glow
+                    ctx.fillStyle = 'rgba(6, 182, 212, 0.2)';
+                    ctx.beginPath();
+                    ctx.arc(x, y, 12, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Inner dot
+                    ctx.fillStyle = '#06b6d4';
+                    ctx.beginPath();
+                    ctx.arc(x, y, 6, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Label (only if not too cluttered)
+                    if (waypoints.length <= 10) {
+                        ctx.fillStyle = '#94a3b8';
+                        ctx.font = '10px JetBrains Mono';
+                        ctx.textAlign = 'center';
+                        ctx.fillText(`WP${i + 1}`, x, y - 16);
+                        ctx.fillText(`${wp.n},${wp.e}`, x, y + 20);
+                    }
+                });
+
+                // Draw direction arrows on path
+                ctx.fillStyle = 'rgba(245, 158, 11, 0.8)';
+                let prev = [0, 0];
+                waypoints.forEach(wp => {
+                    const [x1, y1] = toCanvas(prev[0], prev[1]);
+                    const [x2, y2] = toCanvas(wp.n, wp.e);
+                    const mx = (x1 + x2) / 2;
+                    const my = (y1 + y2) / 2;
+                    const angle = Math.atan2(y2 - y1, x2 - x1);
+
+                    ctx.save();
+                    ctx.translate(mx, my);
+                    ctx.rotate(angle);
+                    ctx.beginPath();
+                    ctx.moveTo(6, 0);
+                    ctx.lineTo(-3, -4);
+                    ctx.lineTo(-3, 4);
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.restore();
+
+                    prev = [wp.n, wp.e];
+                });
+            }
+
+            // Draw home position
+            const [hx, hy] = toCanvas(0, 0);
+            ctx.fillStyle = '#10b981';
+            ctx.beginPath();
+            ctx.arc(hx, hy, 8, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 9px Inter';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('H', hx, hy);
+
+            // Show status message if no waypoints
+            if (waypoints.length === 0 && !mission.explore_area) {
+                ctx.fillStyle = '#64748b';
+                ctx.font = '12px Inter';
+                ctx.textAlign = 'center';
+                ctx.fillText('Drone at Home (No waypoints to plot)', w / 2, h - 20);
+            }
+        }
+
+        // ── Pipeline Step Indicator ──
+        function setPipelineStep(stepName, state) {
+            const step = document.getElementById(`step-${stepName}`);
+            if (!step) return;
+            step.className = `pipeline-step ${state}`;
+
+            // Update completed prompt step when we start LLM
+            if (stepName === 'llm' && state === 'active') {
+                document.getElementById('step-prompt').className = 'pipeline-step completed';
+            }
+        }
+
+        function setStatus(type, text) {
+            const dot = document.getElementById('statusDot');
+            const label = document.getElementById('statusText');
+            label.textContent = text;
+
+            dot.className = 'status-dot';
+            if (type === 'error') dot.classList.add('error');
+            else if (type === 'planning' || type === 'executing') dot.classList.add('warning');
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function resetPipeline() {
+            currentMission = null;
+            isValidated = false;
+            document.getElementById('promptInput').value = '';
+            const execBtn = document.getElementById('executeBtn');
+            execBtn.disabled = true;
+            execBtn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+            lucide.createIcons();
+            setStatus('idle', 'Idle');
+
+            // Reset pipeline indicators
+            ['prompt', 'llm', 'validate', 'execute', 'sim'].forEach(s => {
+                setPipelineStep(s, '');
+            });
+
+            // Reset cards
+            document.getElementById('jsonContent').innerHTML = `
+            <div class="empty-state"><div class="empty-state-icon"><i data-lucide="file-json" style="width: 48px; height: 48px;"></i></div>
+            <div class="empty-state-text">Submit a prompt to generate the mission plan</div></div>`;
+            document.getElementById('jsonBadge').textContent = 'Awaiting';
+            document.getElementById('jsonBadge').className = 'card-badge badge-stage1';
+
+            document.getElementById('validationContent').innerHTML = `
+            <div class="empty-state"><div class="empty-state-icon"><i data-lucide="shield-check" style="width: 48px; height: 48px;"></i></div>
+            <div class="empty-state-text">Mission will be validated after planning</div></div>`;
+            document.getElementById('validBadge').textContent = 'Awaiting';
+            document.getElementById('validBadge').className = 'card-badge badge-stage2';
+
+            document.getElementById('execContent').innerHTML = `
+            <div class="empty-state"><div class="empty-state-icon"><i data-lucide="terminal" style="width: 48px; height: 48px;"></i></div>
+            <div class="empty-state-text">Execute the mission to see the command log</div></div>`;
+            document.getElementById('execBadge').textContent = 'Awaiting';
+            document.getElementById('execBadge').className = 'card-badge badge-stage3';
+
+            // Clear map
+            const canvas = document.getElementById('mapCanvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Reset manual override controls
+            updateMovementSection(false, 'idle');
+        }
+
+        // ── WebSocket telemetry (connect when available) ──
+        let lastStatus = null;
+        function connectTelemetry() {
+            try {
+                const ws = new WebSocket(`ws://${window.location.host}/ws/telemetry`);
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    const tel = data.telemetry || data;
+                    
+                    if (tel.drones && tel.drones.length > 0) {
+                        tel.drones.forEach((drone, idx) => {
+                            const altEl = document.getElementById(`telAlt_${idx}`);
+                            if (altEl) altEl.textContent = drone.altitude_m?.toFixed(1) || '--';
+                            const speedEl = document.getElementById(`telSpeed_${idx}`);
+                            if (speedEl) speedEl.textContent = drone.speed_mps?.toFixed(1) || '--';
+                            const headEl = document.getElementById(`telHeading_${idx}`);
+                            if (headEl) headEl.textContent = drone.heading_deg?.toFixed(0) || '--';
+                            const latEl = document.getElementById(`telLat_${idx}`);
+                            if (latEl) latEl.textContent = drone.latitude?.toFixed(6) || '--';
+                            const lonEl = document.getElementById(`telLon_${idx}`);
+                            if (lonEl) lonEl.textContent = drone.longitude?.toFixed(6) || '--';
+                            const batEl = document.getElementById(`telBat_${idx}`);
+                            if (batEl) batEl.textContent = drone.battery_pct?.toFixed(0) || '--';
+                            
+                            const connEl = document.getElementById(`telConn_${idx}`);
+                            if (connEl) {
+                                const isDConnected = !!drone.connected;
+                                connEl.textContent = isDConnected ? 'Connected' : 'Disconnected';
+                                connEl.className = `card-badge ${isDConnected ? 'badge-success' : 'badge-error'}`;
+                            }
+                        });
+                    } else {
+                        const altEl = document.getElementById('telAlt_0');
+                        if (altEl) altEl.textContent = tel.altitude_m?.toFixed(1) || '--';
+                        const speedEl = document.getElementById('telSpeed_0');
+                        if (speedEl) speedEl.textContent = tel.speed_mps?.toFixed(1) || '--';
+                        const headEl = document.getElementById('telHeading_0');
+                        if (headEl) headEl.textContent = tel.heading_deg?.toFixed(0) || '--';
+                        const latEl = document.getElementById('telLat_0');
+                        if (latEl) latEl.textContent = tel.latitude?.toFixed(6) || '--';
+                        const lonEl = document.getElementById('telLon_0');
+                        if (lonEl) lonEl.textContent = tel.longitude?.toFixed(6) || '--';
+                        const batEl = document.getElementById('telBat_0');
+                        if (batEl) batEl.textContent = tel.battery_pct?.toFixed(0) || '--';
+                        
+                        const connEl = document.getElementById('telConn_0');
+                        if (connEl) {
+                            const isConnected = !!tel.connected;
+                            connEl.textContent = isConnected ? 'Connected' : 'Disconnected';
+                            connEl.className = `card-badge ${isConnected ? 'badge-success' : 'badge-error'}`;
+                        }
+                    }
+
+                    const badge = document.getElementById('telemetryBadge');
+                    const isConnected = !!tel.connected;
+                    badge.textContent = isConnected ? 'Connected' : 'Disconnected';
+                    badge.className = `card-badge ${isConnected ? 'badge-success' : 'badge-error'}`;
+
+                    // Update manual override section visibility and enablement
+                    const status = data.status || 'idle';
+                    updateMovementSection(isConnected, status);
+
+                    // Handle execution state updates from background tasks
+                    if (data.status) {
+                        const status = data.status;
+                        const log = data.execution_log || [];
+
+                        if (status === 'executing') {
+                            const btn = document.getElementById('executeBtn');
+                            btn.disabled = true;
+                            btn.innerHTML = '<span class="spinner"></span> Executing...';
+                            setStatus('executing', 'Executing Mission...');
+                            setPipelineStep('execute', 'active');
+                            setPipelineStep('sim', 'active');
+                            document.getElementById('execBadge').textContent = 'Executing';
+                            document.getElementById('execBadge').className = 'card-badge badge-stage2';
+                            displayExecLog(log);
+
+                            // Reset Hold button to active Hold state
+                            const holdBtn = document.getElementById('holdBtn');
+                            if (holdBtn) {
+                                holdBtn.innerHTML = '<i data-lucide="pause-circle"></i> Hold';
+                                holdBtn.style.backgroundColor = 'var(--accent-amber)';
+                                holdBtn.style.borderColor = 'var(--accent-amber)';
+                            }
+                            isHolding = false;
+                        } else if (status === 'holding') {
+                            // Update Hold button to Resume
+                            const holdBtn = document.getElementById('holdBtn');
+                            if (holdBtn) {
+                                holdBtn.innerHTML = '▶️ Resume';
+                                holdBtn.style.backgroundColor = 'var(--accent-green)';
+                                holdBtn.style.borderColor = 'var(--accent-green)';
+                            }
+                            isHolding = true;
+                        } else if (status === 'completed' && lastStatus === 'executing') {
+                            const btn = document.getElementById('executeBtn');
+                            btn.disabled = false;
+                            btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                            setStatus('completed', 'Mission Complete ✓');
+                            setPipelineStep('execute', 'completed');
+                            setPipelineStep('sim', 'completed');
+                            document.getElementById('execBadge').textContent = 'Complete';
+                            document.getElementById('execBadge').className = 'card-badge badge-success';
+                            displayExecLog(log);
+                        } else if (status === 'error' && lastStatus === 'executing') {
+                            const btn = document.getElementById('executeBtn');
+                            btn.disabled = false;
+                            btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                            setStatus('error', 'Execution Failed');
+                            setPipelineStep('execute', 'error');
+                            setPipelineStep('sim', 'error');
+                            document.getElementById('execBadge').textContent = 'Failed';
+                            document.getElementById('execBadge').className = 'card-badge badge-error';
+                            displayExecLog(log);
+                        } else if (log.length > 0 && document.getElementById('execBadge').textContent === 'Awaiting') {
+                            // Restore logs on load/refresh if we already have one
+                            displayExecLog(log);
+                            if (status === 'completed') {
+                                document.getElementById('execBadge').textContent = 'Complete';
+                                document.getElementById('execBadge').className = 'card-badge badge-success';
+                                setPipelineStep('execute', 'completed');
+                                setPipelineStep('sim', 'completed');
+                            } else if (status === 'error') {
+                                document.getElementById('execBadge').textContent = 'Failed';
+                                document.getElementById('execBadge').className = 'card-badge badge-error';
+                                setPipelineStep('execute', 'error');
+                                setPipelineStep('sim', 'error');
+                            }
+                        }
+                        lastStatus = status;
+                    }
+                };
+                ws.onclose = () => {
+                    setTimeout(connectTelemetry, 3000);
+                };
+            } catch (e) {
+                setTimeout(connectTelemetry, 3000);
+            }
+        }
+        connectTelemetry();
+        initApiKey();
+        // ── Voice to Text ──
+        let recognition;
+        let isRecording = false;
+        let audioContext;
+        let mediaStream;
+        let recorderNode;
+        let audioChunks = [];
+
+        function toggleSpeech() {
+            if (isRecording) {
+                if (recognition) {
+                    recognition.stop();
+                } else {
+                    stopAudioFallbackRecorder();
+                }
+                return;
+            }
+
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (SpeechRecognition) {
+                runNativeSpeechRecognition(SpeechRecognition);
+            } else {
+                console.log("SpeechRecognition not found. Using Web Audio WAV fallback...");
+                runAudioFallbackRecorder();
+            }
+        }
+
+        function runNativeSpeechRecognition(SpeechRecognition) {
+            const micBtn = document.getElementById('micBtn');
+            const input = document.getElementById('promptInput');
+
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.interimResults = false;
+
+            recognition.onstart = function () {
+                isRecording = true;
+                micBtn.style.background = 'rgba(239, 68, 68, 0.2)';
+                micBtn.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+                micBtn.innerHTML = '🔴';
+                input.placeholder = "Listening... Speak now.";
+            };
+
+            recognition.onresult = function (event) {
+                let final_transcript = '';
+                for (let i = event.resultIndex; i < event.results.length; ++i) {
+                    if (event.results[i].isFinal) {
+                        final_transcript += event.results[i][0].transcript;
+                    }
+                }
+                if (final_transcript) {
+                    input.value = final_transcript;
+                }
+            };
+
+            recognition.onerror = function (event) {
+                console.error("Native speech recognition error:", event.error);
+                // Fall back if service/network isn't allowed or working (common in Chromium Linux)
+                if (event.error === 'service-not-allowed' || event.error === 'network' || event.error === 'not-allowed') {
+                    console.log("Native speech API failed. Falling back to backend Web Audio transcription...");
+                    resetMicBtn();
+                    runAudioFallbackRecorder();
+                } else {
+                    resetMicBtn();
+                }
+            };
+
+            recognition.onend = function () {
+                resetMicBtn();
+            };
+
+            recognition.start();
+        }
+
+        function resetMicBtn() {
+            isRecording = false;
+            const micBtn = document.getElementById('micBtn');
+            if (micBtn) {
+                micBtn.style.background = 'none';
+                micBtn.style.borderColor = 'var(--border, #334155)';
+                micBtn.innerHTML = '<i data-lucide="mic"></i>';
+                lucide.createIcons();
+            }
+            handleModeChange();
+        }
+
+        async function runAudioFallbackRecorder() {
+            const micBtn = document.getElementById('micBtn');
+            const input = document.getElementById('promptInput');
+
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err) {
+                alert("Cannot access microphone: " + err.message);
+                return;
+            }
+
+            isRecording = true;
+            if (micBtn) {
+                micBtn.style.background = 'rgba(239, 68, 68, 0.2)';
+                micBtn.style.borderColor = 'rgba(239, 68, 68, 0.5)';
+                micBtn.innerHTML = '🔴';
+            }
+            input.placeholder = "Recording command... Speak now and press 🔴 to stop.";
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            
+            // ScriptProcessorNode for wide browser compatibility
+            const bufferSize = 4096;
+            recorderNode = audioContext.createScriptProcessor(bufferSize, 1, 1);
+            audioChunks = [];
+            
+            recorderNode.onaudioprocess = function(e) {
+                const inputData = e.inputBuffer.getChannelData(0);
+                audioChunks.push(new Float32Array(inputData));
+            };
+
+            source.connect(recorderNode);
+            recorderNode.connect(audioContext.destination);
+        }
+
+        async function stopAudioFallbackRecorder() {
+            const input = document.getElementById('promptInput');
+            
+            if (recorderNode) {
+                recorderNode.disconnect();
+                recorderNode = null;
+            }
+            if (audioContext) {
+                const sampleRate = audioContext.sampleRate;
+                audioContext.close();
+                audioContext = null;
+                
+                if (mediaStream) {
+                    mediaStream.getTracks().forEach(track => track.stop());
+                    mediaStream = null;
+                }
+
+                input.placeholder = "Transcribing audio...";
+
+                // Flatten audio chunks
+                let totalLength = 0;
+                for (let i = 0; i < audioChunks.length; i++) {
+                    totalLength += audioChunks[i].length;
+                }
+                
+                const samples = new Float32Array(totalLength);
+                let offset = 0;
+                for (let i = 0; i < audioChunks.length; i++) {
+                    samples.set(audioChunks[i], offset);
+                    offset += audioChunks[i].length;
+                }
+
+                // Encode Float32 PCM to 16-bit WAV PCM
+                const buffer = new ArrayBuffer(44 + samples.length * 2);
+                const view = new DataView(buffer);
+
+                writeString(view, 0, 'RIFF');
+                view.setUint32(4, 36 + samples.length * 2, true);
+                writeString(view, 8, 'WAVE');
+                writeString(view, 12, 'fmt ');
+                view.setUint32(16, 16, true);
+                view.setUint16(20, 1, true); // PCM Format
+                view.setUint16(22, 1, true); // 1 channel
+                view.setUint32(24, sampleRate, true);
+                view.setUint32(28, sampleRate * 2, true); // Byte rate
+                view.setUint16(32, 2, true); // Block align
+                view.setUint16(34, 16, true); // Bits per sample
+                writeString(view, 36, 'data');
+                view.setUint32(40, samples.length * 2, true);
+
+                let index = 44;
+                for (let i = 0; i < samples.length; i++) {
+                    let s = Math.max(-1, Math.min(1, samples[i]));
+                    view.setInt16(index, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+                    index += 2;
+                }
+
+                const wavBlob = new Blob([view], { type: 'audio/wav' });
+                const formData = new FormData();
+                formData.append('file', wavBlob, 'recording.wav');
+
+                try {
+                    const res = await fetch(`${API}/api/transcribe`, {
+                        method: 'POST',
+                        body: formData
+                    });
+                    const data = await res.json();
+                    if (data.success && data.text) {
+                        input.value = data.text;
+                    } else {
+                        alert("Transcription failed: " + (data.error || "Unintelligible speech"));
+                    }
+                } catch (err) {
+                    alert("Transcription API connection error: " + err.message);
+                }
+            }
+
+            resetMicBtn();
+        }
+
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) {
+                view.setUint8(offset + i, string.charCodeAt(i));
+            }
+        }
+
+        // ── Safety Limits Logic ──
+        function openSafetyModal() {
+            document.getElementById('safetyModal').classList.add('open');
+        }
+        
+        function closeSafetyModal() {
+            document.getElementById('safetyModal').classList.remove('open');
+        }
+        function switchLogTab(tab) {
+            const tabLog = document.getElementById('tabContentLog');
+            const tabTel = document.getElementById('tabContentTelemetry');
+            const btnLog = document.getElementById('tabBtnLog');
+            const btnTel = document.getElementById('tabBtnTelemetry');
+            
+            if (tab === 'log') {
+                if (tabLog) tabLog.style.display = 'flex';
+                if (tabTel) tabTel.style.display = 'none';
+                if (btnLog) btnLog.classList.add('active');
+                if (btnTel) btnTel.classList.remove('active');
+            } else {
+                if (tabLog) tabLog.style.display = 'none';
+                if (tabTel) tabTel.style.display = 'flex';
+                if (btnLog) btnLog.classList.remove('active');
+                if (btnTel) btnTel.classList.add('active');
+                if (window.lucide) {
+                    lucide.createIcons();
+                }
+            }
+        }
+
+        async function loadSafetyLimits() {
+            try {
+                const res = await fetch(`${API}/api/safety`);
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('cfg_max_flight_time_s').value = data.max_flight_time_s || 900;
+                    document.getElementById('cfg_max_leg_distance_m').value = data.max_leg_distance_m || 500;
+                    document.getElementById('cfg_min_waypoint_spacing_m').value = data.min_waypoint_spacing_m || 1.0;
+                    document.getElementById('cfg_geofence_radius_m').value = data.geofence_radius_m || 200;
+                    document.getElementById('cfg_max_altitude_m').value = data.max_altitude_m || 50;
+                    document.getElementById('cfg_max_speed_mps').value = data.max_speed_mps || 15;
+                }
+            } catch (err) {
+                console.error("Failed to load safety limits", err);
+            }
+        }
+
+        async function saveSafetyLimits() {
+            const payload = {
+                max_flight_time_s: parseFloat(document.getElementById('cfg_max_flight_time_s').value),
+                max_leg_distance_m: parseFloat(document.getElementById('cfg_max_leg_distance_m').value),
+                min_waypoint_spacing_m: parseFloat(document.getElementById('cfg_min_waypoint_spacing_m').value),
+                geofence_radius_m: parseFloat(document.getElementById('cfg_geofence_radius_m').value),
+                max_altitude_m: parseFloat(document.getElementById('cfg_max_altitude_m').value),
+                max_speed_mps: parseFloat(document.getElementById('cfg_max_speed_mps').value)
+            };
+            try {
+                const res = await fetch(`${API}/api/safety`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (res.ok) {
+                    alert("✅ Safety limits saved successfully!");
+                    closeSafetyModal();
+                    // Revalidate current mission if any
+                    if (typeof revalidateMission === 'function' && currentMission) {
+                        revalidateMission();
+                    }
+                } else {
+                    alert("❌ Failed to save safety limits.");
+                }
+            } catch (err) {
+                console.error("Failed to save safety limits", err);
+                alert("❌ Error connecting to server.");
+            }
+        }
+
+        // Initialize on load
+        loadSafetyLimits();
+        handleModeChange();
+        lucide.createIcons();
+
+    </script>
+</body>
+
+</html>

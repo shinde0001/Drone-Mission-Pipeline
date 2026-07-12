@@ -1,0 +1,816 @@
+"""
+app.py — FastAPI Web Dashboard Backend
+
+Provides a web interface for the drone mission pipeline with:
+  - REST API endpoints for plan/validate/execute
+  - WebSocket for live telemetry streaming
+  - Serves the frontend static files
+"""
+
+import asyncio
+import json
+import os
+import sys
+from pathlib import Path
+from datetime import datetime, timezone
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, BackgroundTasks, UploadFile, File
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.llm_planner import plan_mission
+from src.mission_validator import validate_mission
+from src.utils import load_waypoint_library, AuditLog, load_safety_limits
+from mavsdk import System
+
+app = FastAPI(
+    title="🚁 Drone Mission Pipeline",
+    description="AI-powered drone mission planning and execution",
+    version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── State ──
+pipeline_state = {
+    "status": "idle",  # idle, planning, validating, executing, error
+    "last_mission": None,
+    "last_validation": None,
+    "execution_log": [],
+    "telemetry": {
+        "connected": False,
+        "armed": False,
+        "altitude_m": 0,
+        "speed_mps": 0,
+        "latitude": 0,
+        "longitude": 0,
+        "heading_deg": 0,
+        "battery_pct": 100,
+        "drones": [
+            {
+                "connected": False,
+                "armed": False,
+                "altitude_m": 0.0,
+                "speed_mps": 0.0,
+                "latitude": 0.0,
+                "longitude": 0.0,
+                "heading_deg": 0.0,
+                "battery_pct": 100,
+            } for _ in range(5)
+        ]
+    },
+    "last_telemetry_update": datetime.now(timezone.utc),
+}
+
+# Shared drone system instance
+shared_drone = System()
+
+# Shared telemetry state for executor
+shared_telemetry_state = {
+    "position": None,
+    "home": None
+}
+
+def is_simulator_running():
+    import subprocess
+    try:
+        subprocess.check_output(["pgrep", "-f", "px4"])
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+def update_telemetry_timestamp():
+    pipeline_state["last_telemetry_update"] = datetime.now(timezone.utc)
+
+async def monitor_position(drone):
+    try:
+        async for position in drone.telemetry.position():
+            update_telemetry_timestamp()
+            shared_telemetry_state["position"] = position
+            pipeline_state["telemetry"]["altitude_m"] = position.relative_altitude_m
+            pipeline_state["telemetry"]["latitude"] = position.latitude_deg
+            pipeline_state["telemetry"]["longitude"] = position.longitude_deg
+    except Exception as e:
+        print(f"Error monitoring position: {e}")
+
+async def monitor_armed(drone):
+    try:
+        async for armed in drone.telemetry.armed():
+            update_telemetry_timestamp()
+            pipeline_state["telemetry"]["armed"] = armed
+    except Exception as e:
+        print(f"Error monitoring armed state: {e}")
+
+async def monitor_heading(drone):
+    try:
+        async for heading in drone.telemetry.heading():
+            update_telemetry_timestamp()
+            pipeline_state["telemetry"]["heading_deg"] = heading.heading_deg
+    except Exception as e:
+        print(f"Error monitoring heading: {e}")
+
+async def monitor_speed(drone):
+    try:
+        async for velocity in drone.telemetry.velocity_ned():
+            update_telemetry_timestamp()
+            speed = (velocity.north_m_s**2 + velocity.east_m_s**2 + velocity.down_m_s**2)**0.5
+            pipeline_state["telemetry"]["speed_mps"] = speed
+    except Exception as e:
+        print(f"Error monitoring speed: {e}")
+
+async def monitor_battery(drone):
+    try:
+        async for battery in drone.telemetry.battery():
+            update_telemetry_timestamp()
+            pct = battery.remaining_percent
+            if pct <= 1.0:
+                pct *= 100
+            pipeline_state["telemetry"]["battery_pct"] = pct
+    except Exception as e:
+        print(f"Error monitoring battery: {e}")
+
+async def monitor_status_text(drone):
+    try:
+        async for status_text in drone.telemetry.status_text():
+            update_telemetry_timestamp()
+            severity = str(status_text.type)
+            message = status_text.text
+            
+            # Map severity status for UI
+            status_val = "info"
+            if "WARN" in severity or "NOTICE" in severity:
+                status_val = "warning"
+            elif "ERROR" in severity or "CRITICAL" in severity or "EMERGENCY" in severity or "ALERT" in severity:
+                status_val = "error"
+                
+            # Add to execution log
+            pipeline_state["execution_log"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "elapsed_s": 0.0,
+                "action": "drone_telemetry",
+                "status": status_val,
+                "details": {"message": f"[PX4] {severity}: {message}"},
+            })
+            # Cap the log size to prevent memory leaks
+            if len(pipeline_state["execution_log"]) > 200:
+                pipeline_state["execution_log"] = pipeline_state["execution_log"][-200:]
+    except Exception as e:
+        print(f"Error monitoring status text: {e}")
+
+async def monitor_single_drone_task(drone_idx: int, port: int):
+    while True:
+        try:
+            if not is_simulator_running():
+                pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
+                if drone_idx == 0:
+                    pipeline_state["telemetry"]["connected"] = False
+                await asyncio.sleep(2)
+                continue
+
+            drone = System()
+            await drone.connect(system_address=f"udp://:{port}")
+            # wait for connection
+            async for state in drone.core.connection_state():
+                if state.is_connected:
+                    break
+            
+            pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = True
+            
+            # Leader (index 0) updates the main telemetry dict for backwards compatibility
+            if drone_idx == 0:
+                pipeline_state["telemetry"]["connected"] = True
+                
+            async def run_position():
+                async for pos in drone.telemetry.position():
+                    pipeline_state["telemetry"]["drones"][drone_idx]["latitude"] = pos.latitude_deg
+                    pipeline_state["telemetry"]["drones"][drone_idx]["longitude"] = pos.longitude_deg
+                    pipeline_state["telemetry"]["drones"][drone_idx]["altitude_m"] = pos.relative_altitude_m
+                    if drone_idx == 0:
+                        pipeline_state["telemetry"]["latitude"] = pos.latitude_deg
+                        pipeline_state["telemetry"]["longitude"] = pos.longitude_deg
+                        pipeline_state["telemetry"]["altitude_m"] = pos.relative_altitude_m
+                        shared_telemetry_state["position"] = pos
+                        update_telemetry_timestamp()
+
+            async def run_home():
+                async for home_pos in drone.telemetry.home():
+                    if drone_idx == 0:
+                        shared_telemetry_state["home"] = home_pos
+
+            async def run_armed():
+                async for armed in drone.telemetry.armed():
+                    pipeline_state["telemetry"]["drones"][drone_idx]["armed"] = armed
+                    if drone_idx == 0:
+                        pipeline_state["telemetry"]["armed"] = armed
+                        update_telemetry_timestamp()
+
+            async def run_heading():
+                async for heading in drone.telemetry.heading():
+                    pipeline_state["telemetry"]["drones"][drone_idx]["heading_deg"] = heading.heading_deg
+                    if drone_idx == 0:
+                        pipeline_state["telemetry"]["heading_deg"] = heading.heading_deg
+                        update_telemetry_timestamp()
+
+            async def run_speed():
+                async for velocity in drone.telemetry.velocity_ned():
+                    speed = (velocity.north_m_s**2 + velocity.east_m_s**2 + velocity.down_m_s**2)**0.5
+                    pipeline_state["telemetry"]["drones"][drone_idx]["speed_mps"] = speed
+                    if drone_idx == 0:
+                        pipeline_state["telemetry"]["speed_mps"] = speed
+                        update_telemetry_timestamp()
+
+            async def run_battery():
+                async for battery in drone.telemetry.battery():
+                    pct = battery.remaining_percent
+                    if pct <= 1.0:
+                        pct *= 100
+                    pipeline_state["telemetry"]["drones"][drone_idx]["battery_pct"] = pct
+                    if drone_idx == 0:
+                        pipeline_state["telemetry"]["battery_pct"] = pct
+                        update_telemetry_timestamp()
+
+            async def run_continuous_log():
+                while True:
+                    await asyncio.sleep(2.0)
+                    if pipeline_state["telemetry"]["connected"]:
+                        alt = pipeline_state["telemetry"]["altitude_m"]
+                        spd = pipeline_state["telemetry"]["speed_mps"]
+                        hdg = pipeline_state["telemetry"]["heading_deg"]
+                        pipeline_state["execution_log"].append({
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "elapsed_s": 0.0,
+                            "action": "drone_telemetry",
+                            "status": "info",
+                            "details": {"message": f"[Live Telemetry] Alt: {alt:.1f}m | Speed: {spd:.1f}m/s | Heading: {hdg:.0f}°"},
+                        })
+                        if len(pipeline_state["execution_log"]) > 200:
+                            pipeline_state["execution_log"] = pipeline_state["execution_log"][-200:]
+
+            tasks = [
+                asyncio.create_task(run_position()),
+                asyncio.create_task(run_armed()),
+                asyncio.create_task(run_heading()),
+                asyncio.create_task(run_speed()),
+                asyncio.create_task(run_battery()),
+            ]
+            if drone_idx == 0:
+                tasks.append(asyncio.create_task(run_home()))
+                tasks.append(asyncio.create_task(monitor_status_text(drone)))
+                tasks.append(asyncio.create_task(run_continuous_log()))
+                global shared_drone
+                shared_drone = drone
+
+            # Watch connection state to handle disconnection
+            async for state in drone.core.connection_state():
+                if not state.is_connected:
+                    break
+
+            for t in tasks:
+                t.cancel()
+
+        except Exception as e:
+            pass
+        
+        pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
+        if drone_idx == 0:
+            pipeline_state["telemetry"]["connected"] = False
+        await asyncio.sleep(2)
+
+
+async def telemetry_background_task():
+    tasks = [
+        asyncio.create_task(monitor_single_drone_task(i, 14540 + i))
+        for i in range(5)
+    ]
+    await asyncio.gather(*tasks)
+
+@app.on_event("startup")
+async def startup_event():
+    # Kill any orphaned processes from previous runs on startup
+    import subprocess
+    try:
+        subprocess.run(["killall", "-9", "px4", "gzserver", "gzclient", "ruby", "make", "sitl_multiple_run.sh", "mavsdk_server"], capture_output=True)
+    except Exception:
+        pass
+    asyncio.create_task(telemetry_background_task())
+
+
+# ── Serve frontend ──
+DASHBOARD_DIR = Path(__file__).parent
+
+
+@app.get("/", response_class=HTMLResponse)
+async def serve_index():
+    return FileResponse(
+        DASHBOARD_DIR / "index.html",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+    )
+
+
+@app.get("/style.css")
+async def serve_css():
+    return FileResponse(
+        DASHBOARD_DIR / "style.css",
+        media_type="text/css",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+    )
+
+
+# ── API Endpoints ──
+
+@app.get("/api/status")
+async def get_status():
+    """Get current pipeline status and telemetry."""
+    return pipeline_state
+
+
+@app.get("/api/routes")
+async def get_routes():
+    """Get available predefined routes."""
+    library = load_waypoint_library()
+    routes = {}
+    for name, data in library.items():
+        routes[name] = {
+            "description": data["description"],
+            "default_altitude_m": data["default_altitude_m"],
+            "default_speed_mps": data["default_speed_mps"],
+            "waypoint_count": len(data["waypoints"]),
+            "waypoints": data["waypoints"],
+        }
+    return routes
+
+
+@app.get("/api/safety")
+async def get_safety():
+    """Get current safety limits."""
+    return load_safety_limits()
+
+
+@app.post("/api/safety")
+async def update_safety(body: dict):
+    """Update safety limits."""
+    import yaml
+    from pathlib import Path
+    
+    current_limits = load_safety_limits()
+    # Update only the allowed editable numeric parameters
+    editable_keys = [
+        "max_altitude_m", "max_speed_mps", "geofence_radius_m",
+        "max_flight_time_s", "max_leg_distance_m", "min_waypoint_spacing_m"
+    ]
+    for key in editable_keys:
+        if key in body:
+            current_limits[key] = float(body[key])
+
+    config_path = Path(__file__).resolve().parent.parent / "config" / "safety_limits.yaml"
+    with open(config_path, 'w') as f:
+        yaml.dump(current_limits, f, default_flow_style=False, sort_keys=False)
+        
+    return {"success": True, "limits": current_limits}
+
+
+@app.post("/api/plan")
+async def plan(body: dict):
+    """Stage 1: Generate mission plan from prompt."""
+    prompt = body.get("prompt", "")
+    mode = body.get("mode", "standard")
+    ai_engine = body.get("ai_engine", "offline")
+    api_key = body.get("api_key")
+    num_drones = int(body.get("num_drones", 3))
+
+    pipeline_state["status"] = "planning"
+    pipeline_state["current_mode"] = mode
+    pipeline_state["num_drones"] = num_drones
+
+    try:
+        mission = plan_mission(prompt, mode=mode, ai_engine=ai_engine, api_key=api_key, num_drones=num_drones)
+
+        pipeline_state["last_mission"] = mission
+        pipeline_state["status"] = "planned"
+
+        return {
+            "success": True,
+            "mission": mission,
+        }
+    except Exception as e:
+        pipeline_state["status"] = "error"
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": str(e)},
+        )
+
+
+@app.post("/api/validate")
+async def validate(body: dict):
+    """Stage 2: Validate mission JSON."""
+    mission = body.get("mission") or pipeline_state.get("last_mission")
+    if not mission:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "No mission to validate"},
+        )
+
+    pipeline_state["status"] = "validating"
+
+    result = validate_mission(mission)
+    pipeline_state["last_validation"] = {
+        "valid": result.valid,
+        "errors": result.errors,
+        "warnings": result.warnings,
+    }
+
+    pipeline_state["status"] = "validated" if result.valid else "validation_failed"
+
+    return {
+        "success": result.valid,
+        "valid": result.valid,
+        "errors": result.errors,
+        "warnings": result.warnings,
+    }
+
+
+# Moved is_simulator_running to the top of the file
+
+
+def ensure_simulator_running(mode="standard", num_drones=3):
+    import subprocess
+    import os
+    try:
+        subprocess.run(["killall", "-9", "px4", "gzserver", "gzclient", "ruby", "make", "sitl_multiple_run.sh"], capture_output=True)
+    except Exception:
+        pass
+    project_root = Path(__file__).resolve().parent.parent
+    launch_script = project_root / "launch_sim.sh"
+    env = os.environ.copy()
+    if "DISPLAY" in env:
+        env.pop("HEADLESS", None)
+    else:
+        env["HEADLESS"] = "1"
+    env["NUM_DRONES"] = str(num_drones)
+    sim_process = subprocess.Popen(
+        ["bash", str(launch_script), "--mode", mode],
+        cwd=str(project_root),
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        preexec_fn=os.setsid
+    )
+    pipeline_state["sim_process"] = sim_process
+
+
+async def run_mission_background(mission: dict):
+    pipeline_state["status"] = "executing"
+    pipeline_state["execution_log"] = []
+
+    def on_audit_record(entry):
+        pipeline_state["execution_log"].append(entry)
+
+    audit_log = AuditLog(callback=on_audit_record)
+    mode = pipeline_state.get("current_mode", "standard")
+    num_drones = pipeline_state.get("num_drones", 3)
+
+    pipeline_state["telemetry"]["connected"] = False
+    audit_log.record("start_simulator", {"message": f"Starting simulator in '{mode}' mode with {num_drones} drones..."})
+    ensure_simulator_running(mode, num_drones)
+    pipeline_state["active_sim_mode"] = mode
+    
+    # Wait for the simulator to launch and telemetry to connect
+    connected = False
+    for _ in range(240):  # Wait up to 120 seconds (240 * 0.5s)
+        if pipeline_state["telemetry"]["connected"]:
+            connected = True
+            break
+        await asyncio.sleep(0.5)
+
+    if not connected:
+        pipeline_state["status"] = "error"
+        pipeline_state["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": 0.0,
+            "action": "error",
+            "status": "error",
+            "details": {"message": f"Failed to connect to simulator in '{mode}' mode."},
+        })
+        return
+    audit_log.record("simulator_connected", {"message": f"Simulator connected successfully in '{mode}' mode."})
+
+    try:
+        if mode == "swarm":
+            from src.executors.swarm_executor import execute_swarm_mission
+            # Ensure mission has drone_count from user selection (overrides LLM if different)
+            mission["drone_count"] = num_drones
+            await execute_swarm_mission(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
+        elif mode == "vision":
+            from src.executors.vision_executor import execute_vision_mission
+            await execute_vision_mission(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
+        elif mode == "slam":
+            from src.executors.slam_executor import execute_slam_mission
+            await execute_slam_mission(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
+        else:
+            from src.executor import execute_mission_async
+            await execute_mission_async(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
+        pipeline_state["status"] = "completed"
+    except Exception as e:
+        pipeline_state["status"] = "error"
+        pipeline_state["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": 0.0,
+            "action": "error",
+            "status": "error",
+            "details": {"message": str(e)},
+        })
+
+
+active_mission_task = None
+
+@app.post("/api/execute")
+async def execute(body: dict):
+    """Stage 3: Execute validated mission asynchronously."""
+    global active_mission_task
+    
+    mission = body.get("mission") or pipeline_state.get("last_mission")
+    if not mission:
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "No mission to execute"},
+        )
+    
+    # Inject num_drones from pipeline state
+    mission["num_drones"] = pipeline_state.get("num_drones", 3)
+
+    # Check validation
+    validation = pipeline_state.get("last_validation")
+    if not validation or not validation.get("valid"):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "success": False,
+                "error": "Mission must be validated before execution",
+            },
+        )
+
+    # Cancel previous running mission if it exists
+    if active_mission_task and not active_mission_task.done():
+        print("Cancelling previous background mission execution...")
+        active_mission_task.cancel()
+
+    active_mission_task = asyncio.create_task(run_mission_background(mission))
+    return {"success": True, "message": "Mission execution started"}
+
+
+@app.post("/api/terminate")
+async def terminate_mission():
+    """Terminate the current mission and kill simulator."""
+    global active_mission_task
+    if active_mission_task and not active_mission_task.done():
+        print("Cancelling active mission task...")
+        active_mission_task.cancel()
+    
+    import subprocess
+    import os
+    import signal
+    print("Killing simulator processes...")
+    sim_process = pipeline_state.get("sim_process")
+    if sim_process:
+        try:
+            os.killpg(os.getpgid(sim_process.pid), signal.SIGTERM)
+        except Exception:
+            pass
+        pipeline_state["sim_process"] = None
+
+    try:
+        subprocess.run(["killall", "-9", "px4", "gzserver", "gzclient", "ruby", "make", "sitl_multiple_run.sh", "mavsdk_server"], capture_output=True)
+    except Exception:
+        pass
+    
+    pipeline_state["status"] = "idle"
+    pipeline_state["execution_log"].append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "elapsed_s": 0.0,
+        "action": "terminated",
+        "status": "error",
+        "details": {"message": "Mission terminated by user. Simulator killed."},
+    })
+    
+    return {"success": True, "message": "Mission terminated successfully"}
+
+
+@app.post("/api/action/hold")
+async def action_hold():
+    """Live hold command."""
+    global active_mission_task
+    if active_mission_task and not active_mission_task.done():
+        active_mission_task.cancel()
+    
+    try:
+        await shared_drone.action.hold()
+        pipeline_state["status"] = "holding"
+        pipeline_state["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": 0.0,
+            "action": "hold (Live)",
+            "status": "success",
+            "details": {"message": "Holding position"},
+        })
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/action/rtl")
+async def action_rtl():
+    """Live Return to Launch command."""
+    global active_mission_task
+    if active_mission_task and not active_mission_task.done():
+        active_mission_task.cancel()
+    
+    try:
+        await shared_drone.action.return_to_launch()
+        pipeline_state["status"] = "returning"
+        pipeline_state["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": 0.0,
+            "action": "rtl (Live)",
+            "status": "success",
+            "details": {"message": "Returning to launch"},
+        })
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/action/arm")
+async def action_arm():
+    """Live arm command."""
+    try:
+        await shared_drone.action.arm()
+        pipeline_state["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": 0.0,
+            "action": "arm (Live)",
+            "status": "success",
+            "details": {"message": "Drones armed manually"},
+        })
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/action/disarm")
+async def action_disarm():
+    """Live disarm command."""
+    try:
+        await shared_drone.action.disarm()
+        pipeline_state["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": 0.0,
+            "action": "disarm (Live)",
+            "status": "success",
+            "details": {"message": "Drones disarmed manually"},
+        })
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/action/move")
+async def action_move(body: dict):
+    """Move drone in a specific direction."""
+    import math
+    direction = body.get("direction")
+    distance = body.get("distance", 5.0)
+    
+    pos = shared_telemetry_state.get("position")
+    if not pos:
+        return {"success": False, "error": "No telemetry position available"}
+        
+    lat = pos.latitude_deg
+    lon = pos.longitude_deg
+    alt = pos.absolute_altitude_m
+    
+    heading = pipeline_state["telemetry"]["heading_deg"]
+    
+    d_lat = 0
+    d_lon = 0
+    d_alt = 0
+    
+    if direction == "up":
+        d_alt = distance
+    elif direction == "down":
+        d_alt = -distance
+    elif direction == "front":
+        d_lat = (distance * math.cos(math.radians(heading))) / 111111.0
+        d_lon = (distance * math.sin(math.radians(heading))) / (111111.0 * math.cos(math.radians(lat)))
+    elif direction == "back":
+        d_lat = -(distance * math.cos(math.radians(heading))) / 111111.0
+        d_lon = -(distance * math.sin(math.radians(heading))) / (111111.0 * math.cos(math.radians(lat)))
+    elif direction == "right":
+        d_lat = (distance * math.cos(math.radians(heading + 90))) / 111111.0
+        d_lon = (distance * math.sin(math.radians(heading + 90))) / (111111.0 * math.cos(math.radians(lat)))
+    elif direction == "left":
+        d_lat = (distance * math.cos(math.radians(heading - 90))) / 111111.0
+        d_lon = (distance * math.sin(math.radians(heading - 90))) / (111111.0 * math.cos(math.radians(lat)))
+    else:
+        return {"success": False, "error": "Unknown direction"}
+        
+    new_lat = lat + d_lat
+    new_lon = lon + d_lon
+    new_alt = alt + d_alt
+    
+    try:
+        await shared_drone.action.goto_location(new_lat, new_lon, new_alt, heading)
+        pipeline_state["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "elapsed_s": 0.0,
+            "action": f"move {direction}",
+            "status": "success",
+            "details": {"message": f"Moving {direction} by {distance}m"},
+        })
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/plan-validate")
+async def plan_and_validate(body: dict):
+    """Combined: Plan + Validate in one call."""
+    # Plan
+    plan_result = await plan(body)
+    if isinstance(plan_result, JSONResponse):
+        return plan_result
+
+    plan_data = plan_result
+    if not plan_data.get("success"):
+        return plan_data
+
+    # Validate
+    validate_result = await validate({"mission": plan_data["mission"]})
+
+    return {
+        "mission": plan_data["mission"],
+        "validation": validate_result,
+    }
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcribes an uploaded WAV audio file using speech_recognition."""
+    import tempfile
+    import speech_recognition as sr
+    
+    try:
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+            
+        r = sr.Recognizer()
+        with sr.AudioFile(tmp_path) as source:
+            audio = r.record(source)
+            
+        # Clean up temp file
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+            
+        # Transcribe using Google Web Speech (free, no keys required)
+        text = r.recognize_google(audio)
+        return {"success": True, "text": text}
+    except sr.UnknownValueError:
+        return {"success": False, "error": "Speech was unintelligible"}
+    except sr.RequestError as e:
+        return {"success": False, "error": f"API request failed: {str(e)}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# ── WebSocket for live telemetry ──
+
+@app.websocket("/ws/telemetry")
+async def telemetry_ws(websocket: WebSocket):
+    """WebSocket endpoint for streaming live telemetry data and execution logs."""
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.send_json({
+                "telemetry": pipeline_state["telemetry"],
+                "status": pipeline_state["status"],
+                "execution_log": pipeline_state["execution_log"],
+            })
+            await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        pass
+
+
+if __name__ == "__main__":
+    import uvicorn
+    print("🚁 Starting Drone Pipeline Dashboard on http://localhost:8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000)

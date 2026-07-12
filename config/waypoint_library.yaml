@@ -1,0 +1,121 @@
+# ============================================================
+# Waypoint Library — Predefined Routes
+# All coordinates are in NED (North-East-Down) offsets from
+# the PX4 SITL home position.
+#
+# The LLM planner references these routes by name, so the
+# operator can say "fly the perimeter loop" without specifying
+# individual waypoints.
+#
+# PX4 Gazebo Classic default home:
+#   lat: 47.397742, lon: 8.545594, alt: 488m (AMSL)
+# ============================================================
+
+# ----------------------------------------------------------
+# Perimeter Loop — Square patrol pattern
+# 80m x 80m square, flown clockwise
+# ----------------------------------------------------------
+perimeter_loop:
+  description: "Square perimeter patrol, 80m sides, clockwise"
+  default_altitude_m: 15
+  default_speed_mps: 5
+  waypoints:
+    - name: "NE corner"
+      north_m: 40
+      east_m: 40
+    - name: "SE corner"
+      north_m: -40
+      east_m: 40
+    - name: "SW corner"
+      north_m: -40
+      east_m: -40
+    - name: "NW corner"
+      north_m: 40
+      east_m: -40
+
+# ----------------------------------------------------------
+# Figure Eight — Inspection pattern
+# Two overlapping circles approximated by 8 waypoints
+# ----------------------------------------------------------
+figure_eight:
+  description: "Figure-8 inspection pattern, ~60m extent"
+  default_altitude_m: 12
+  default_speed_mps: 4
+  waypoints:
+    - name: "center"
+      north_m: 0
+      east_m: 0
+    - name: "north_right"
+      north_m: 20
+      east_m: 15
+    - name: "north_apex"
+      north_m: 30
+      east_m: 0
+    - name: "north_left"
+      north_m: 20
+      east_m: -15
+    - name: "center_cross"
+      north_m: 0
+      east_m: 0
+    - name: "south_left"
+      north_m: -20
+      east_m: -15
+    - name: "south_apex"
+      north_m: -30
+      east_m: 0
+    - name: "south_right"
+      north_m: -20
+      east_m: 15
+
+# ----------------------------------------------------------
+# Linear Sweep — Lawn-mower / back-and-forth pattern
+# Covers a 60m x 40m area in parallel lines
+# ----------------------------------------------------------
+linear_sweep:
+  description: "Back-and-forth lawn-mower sweep, 60m x 40m area"
+  default_altitude_m: 10
+  default_speed_mps: 3
+  waypoints:
+    - name: "start"
+      north_m: -30
+      east_m: -20
+    - name: "line1_end"
+      north_m: 30
+      east_m: -20
+    - name: "step_right_1"
+      north_m: 30
+      east_m: -10
+    - name: "line2_end"
+      north_m: -30
+      east_m: -10
+    - name: "step_right_2"
+      north_m: -30
+      east_m: 0
+    - name: "line3_end"
+      north_m: 30
+      east_m: 0
+    - name: "step_right_3"
+      north_m: 30
+      east_m: 10
+    - name: "line4_end"
+      north_m: -30
+      east_m: 10
+    - name: "step_right_4"
+      north_m: -30
+      east_m: 20
+    - name: "line5_end"
+      north_m: 30
+      east_m: 20
+
+# ----------------------------------------------------------
+# Simple Hover — Takeoff and hold position
+# Useful for testing basic connectivity
+# ----------------------------------------------------------
+simple_hover:
+  description: "Simple takeoff and hover in place"
+  default_altitude_m: 10
+  default_speed_mps: 3
+  waypoints:
+    - name: "hover_point"
+      north_m: 0
+      east_m: 0

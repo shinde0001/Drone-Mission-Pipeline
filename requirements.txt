@@ -1,0 +1,8 @@
+# Drone Pipeline — Python Dependencies
+mavsdk>=2.0
+openai>=1.0
+jsonschema>=4.0
+pyyaml>=6.0
+fastapi>=0.100
+uvicorn>=0.20
+websockets>=12.0
