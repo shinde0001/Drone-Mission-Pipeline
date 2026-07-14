@@ -1,168 +1,166 @@
-# 🚁 AI-Powered Drone Mission Pipeline
+# 🚁 AI-Powered Drone Mission Pipeline & Autonomous Control Stack
 
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://python.org)
-[![PX4 Autopilot](https://img.shields.io/badge/PX4-SITL-orange.svg)](https://px4.io/)
+[![PX4 Autopilot](https://img.shields.io/badge/PX4-SITL%201.14+-orange.svg)](https://px4.io/)
 [![Gazebo Classic](https://img.shields.io/badge/Gazebo-Classic%2011-brightgreen.svg)](https://gazebosim.org)
-[![MAVSDK](https://img.shields.io/badge/MAVSDK-Python-blueviolet.svg)](https://mavsdk.mavlink.io/)
+[![MAVSDK](https://img.shields.io/badge/MAVSDK-Python%20Core-blueviolet.svg)](https://mavsdk.mavlink.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An enterprise-grade, safety-first mission planning and execution pipeline for autonomous drones. This system translates natural-language operator commands into structured missions via Large Language Models (LLMs), runs them through a multi-tier deterministic validation suite, and executes them in real-time on PX4-simulated UAVs in Gazebo.
+An enterprise-grade, safety-critical mission planning, validation, and execution pipeline for autonomous unmanned aerial vehicles (UAVs). This stack decouples **probabilistic NLP/LLM reasoning** from **deterministic flight controls**, translating high-level operator commands into verified flight paths executed in real-time on PX4-simulated UAVs in Gazebo Classic.
 
 ---
 
-## 📌 Architectural Overview
+## 📌 System Architecture & Dataflow
 
-This system separates **probabilistic AI reasoning** from **deterministic flight execution** to enforce strict safety guarantees. The LLM never commands the vehicle directly.
+To meet industrial safety standards, the flight execution layer is strictly isolated from the AI inference engine. The LLM acts solely as a mission generator, and its outputs are audited by a deterministic safety validation engine before MAVLink transmission.
 
 ```mermaid
 graph TD
-    A[Operator Prompt] -->|Text / Speech| B(Stage 1: LLM Planner)
-    B -->|Offline Ollama / Online Gemini| C{Stage 2: Validation Engine}
-    C -->|Schema Validation| C1[1. JSON Schema Match]
-    C -->|Safety Rules| C2[2. Hard Limits: Alt, Speed, Geofence]
-    C -->|Sanity Checking| C3[3. Flight Path Consistency]
-    C1 & C2 & C3 -->|Rejected| D[Operator Interface: Feedback & Errors]
-    C1 & C2 & C3 -->|Approved| E[Stage 3: Deterministic Executor]
-    E -->|MAVSDK / Offboard Mode| F[Stage 4: SITL Simulator PX4 + Gazebo]
-    F -->|Real-Time Telemetry| G[Live Dashboard / WebSocket]
-    G -->|Interactive Override| E
+    A[Operator Prompt] -->|Text / Speech| B(Stage 1: LLM Planner Engine)
+    B -->|Local Ollama / Gemini API| C{Stage 2: Validation Guardrails}
+    C -->|1. JSON Schema Match| C1[Structure Validator]
+    C -->|2. Hard Safety Envelope| C2[Geofence & Alt Limits]
+    C -->|3. Flight Logic Audit| C3[Path & Sequence Auditor]
+    
+    C1 & C2 & C3 -->|Validation Failure| D[Interactive Dashboard: Reject & Correct]
+    C1 & C2 & C3 -->|Validation Success| E[Stage 3: MAVSDK Mission Executor]
+    
+    E -->|MAVLink commands| F[Stage 4: PX4 SITL & Gazebo Physics]
+    F -->|Telemetry Websocket / UDP| G[Real-Time Dashboard UI]
+    G -->|Manual Override / E-Stop| E
 ```
 
 ---
 
-## 🛠️ Key Pipeline Stages
+## 🛠️ Pipeline Deep-Dive
 
-### **Stage 1: LLM Planner (Intent Processing)**
-* Translates complex operator prompts (e.g., *"Patrol a square loop of 20 meters at 10m altitude, repeat twice"*) into structured JSON missions.
-* Supports **Online Mode** (Gemini 3.5 Flash API for high accuracy) and **Offline Mode** (Local Ollama running `llama3.2:1b` for absolute privacy and low latency).
-* Features a fallback prompt architecture with predefined waypoint libraries and local presets.
+### **Stage 1: LLM Planner (Probabilistic Intent Processing)**
+* **Inference Routing**: Utilizes a dual-engine architecture:
+  * **Online Mode**: High-fidelity translation via Google Gemini Flash models.
+  * **Offline Mode**: Local, privacy-preserving inference using Ollama running a custom-parameterized `llama3.2:1b` model.
+* **Instruction Parsing**: Converts raw natural language (e.g., *"Arm, takeoff to 10m, fly to waypoint A at 5m/s, wait 5 seconds, then RTL"*) into structured JSON missions complying with OGC standards.
 
-### **Stage 2: Validation Engine (Safety Guardrails)**
-Every proposed mission is scanned through three strict layers of verification:
-1. **Schema Check:** Verifies JSON compliance against `mission_schema.json`.
-2. **Safety Hard Limits:** Rejects any flight path exceeding maximum altitude (50m), speed (15m/s), or geofence boundary (200m radius from home).
-3. **Flight Logic Sanity:** Ensures correct initialization (starts with takeoff), appropriate navigation bounds, spacing between waypoints, and safe termination sequences (concludes with land or Return to Launch).
+### **Stage 2: Deterministic Safety Validation (Guardrails)**
+No AI-generated mission can bypass this module. Every JSON payload is processed through a strict pipeline:
+1. **Syntactic Check**: Validates properties, coordinates, and types against `mission_schema.json`.
+2. **Physical Boundary Checks**: Enforces hard limit checks configured in `safety_limits.yaml`:
+   * **Max Altitude**: $50\,\text{m}$ AGL.
+   * **Max Velocity**: $15\,\text{m/s}$.
+   * **Max Range (Geofence)**: $200\,\text{m}$ cylinder centered around the initial home coordinates.
+3. **Behavioral Consistency Checking**: Validates flight state sequences (e.g., rejecting paths that command coordinates without taking off, or missions missing landing/RTL commands).
 
-### **Stage 3: Deterministic Executor (MAVSDK Core)**
-* Takes validated JSON files and translates them into sequential MAVLink commands via MAVSDK.
-* Uses **Offboard Position Control (NED frame)** to navigate trajectories with a precision-based waypoint arrival tolerance (2.0 meters).
-* Features an audit logging module (`AuditLog`) which logs every command, flight event, and telemetry change for compliance auditing.
+### **Stage 3: MAVSDK Core & Execution Engine**
+* **Offboard Servo Loop**: Translates waypoints into local North-East-Down (NED) frame position commands or global GPS coordinates.
+* **Accuracy Constraints**: Implements path-following with an adjustable waypoint arrival tolerance (defaulting to sub-2-meter radius).
+* **Telemetry & Audit Logging**: The `AuditLog` module captures telemetry data (roll, pitch, yaw, GPS, battery, system status) at $10\,\text{Hz}$ and logs all flight events to a secure log file for compliance.
 
-### **Stage 4: Simulation Environment (PX4 & Gazebo)**
-* Executes flight plans inside a Software-In-The-Loop (SITL) PX4-Autopilot environment.
-* Runs full physics simulation (wind, gravity, motor inertia) inside Gazebo Classic.
+### **Stage 4: SITL Simulation (PX4 & Gazebo Classic)**
+* Executes flight plans in a Software-In-The-Loop environment reproducing realistic drone kinematics, motor lag, wind profiles, and IMU noise.
 
 ---
 
 ## 🚀 Advanced Operating Modes
 
-The dashboard supports four highly optimized mission control configurations:
-
-1. **Standard Pipeline:** Single-UAV mission planning, telemetry tracking, and structured trajectory execution.
-2. **Multi-agent Formations (Swarms):** Coordinates up to 5 drones in real-time using formation constraints (Wedge, Line, or Column layouts).
-3. **SLAM & Navigation:** Autonomous boundary-restricted exploration for building interior maps and 2D terrain reconstruction.
-4. **Vision AI Target Follow:** Connects computer vision target classes (e.g., identifying and tracking people, boxes, or vehicles) to active offboard movement override systems.
+| Mode | Technology | Description |
+| :--- | :--- | :--- |
+| **Standard Pipeline** | MAVSDK Position Control | Evaluates, translates, and flies structured trajectories. |
+| **Swarm Control** | Multi-agent MAVSDK | Synchronizes up to 5 drones using geometric formation constraints (Line, Wedge, Column). |
+| **SLAM & Mapping** | ROS 2 / Laser Scan | Autonomous boundary exploration with occupancy grid mapping. |
+| **Vision Follower** | YOLOv8 + Visual Servoing | Leverages local YOLOv8 neural network inference to dynamically follow objects (person, car) on Gazebo's camera stream. |
 
 ---
 
-## 📂 Project Structure
+## 📂 Codebase Topology
 
 ```
 drone_pipeline/
-├── README.md                      # Project Documentation
-├── requirements.txt               # Python Package Dependencies
-├── setup_check.sh                 # Environment Compatibility Verification
-├── launch_sim.sh                  # PX4 SITL & Gazebo Launch Orchestrator
-├── run_mission.py                 # Main Command-Line Entrypoint
+├── README.md                      # Project documentation
+├── requirements.txt               # Python package dependencies
+├── setup_check.sh                 # Environment compatibility verification script
+├── launch_sim.sh                  # PX4 SITL & Gazebo launch orchestrator
+├── run_mission.py                 # CLI entrypoint for mission execution
 │
 ├── config/
-│   ├── mission_schema.json        # Mission validation JSON schema
-│   ├── safety_limits.yaml         # Configurable flight safety constraints
-│   └── waypoint_library.yaml      # Static route libraries and waypoint definitions
+│   ├── mission_schema.json        # JSON schema defining valid mission formats
+│   ├── safety_limits.yaml         # Configurable threshold values (geofence, speed, alt)
+│   └── waypoint_library.yaml      # Static route libraries and waypoint presets
 │
 ├── src/
-│   ├── llm_planner.py             # Natural Language to Mission JSON translator
-│   ├── mission_validator.py       # Safety boundaries and structural validator
-│   ├── executor.py                # Single UAV MAVSDK flight logic
+│   ├── llm_planner.py             # Translates operator prompt -> mission JSON
+│   ├── mission_validator.py       # Enforces schema validation and safety guardrails
+│   ├── executor.py                # Translates mission JSON -> MAVSDK drone commands
 │   ├── executors/
-│   │   ├── swarm_executor.py      # Multi-UAV swarm coordinator
-│   │   ├── slam_executor.py       # Autonomous SLAM search script
-│   │   └── vision_executor.py     # OpenCV/Vision target tracking script
-│   └── utils.py                   # Parsing libraries, audit logger, and config loaders
+│   │   ├── swarm_executor.py      # Controls multi-agent swarming formations
+│   │   ├── slam_executor.py       # Runs autonomous exploration and mapping
+│   │   └── vision_executor.py     # Performs visual servoing (YOLOv8 target follow)
+│   └── utils.py                   # Parsing helpers, configurations, and audit loggers
 │
 └── web_dashboard/
-    ├── app.py                     # FastAPI websocket backend
-    ├── index.html                 # Premium dark-themed dashboard frontend
-    └── style.css                  # UI layout styling
+    ├── app.py                     # FastAPI web server and WebSocket telemetry relayer
+    ├── index.html                 # UI cockpit layout
+    └── style.css                  # Modern dark-mode UI styles
 ```
 
 ---
 
-## 💻 Setup & Installation
+## 💻 Installation & Preflight Configuration
 
-### 1. System Requirements
+### **1. System Dependencies**
+Ensure your local host runs:
 * Ubuntu 22.04 LTS
-* ROS 2 Humble
+* ROS 2 Humble (Desktop Installation recommended)
 * Gazebo Classic 11
-* PX4-Autopilot (`~/PX4-Autopilot` built with `make px4_sitl_default`)
-* Python 3.8+
+* PX4-Autopilot directory located at `~/PX4-Autopilot` (built using `make px4_sitl_default`)
+* Python 3.10+ with pip
 
-### 2. Dependency Installation
-Clone this repository and install the required Python libraries:
+### **2. Repository Setup**
+Clone the repository and install requirements:
 ```bash
 git clone https://github.com/shinde0001/Drone-Mission-Pipeline.git
 cd Drone-Mission-Pipeline
 pip3 install -r requirements.txt
 ```
 
-### 3. Preflight Setup Verification
-Run the diagnostic script to ensure ROS, Gazebo, Python dependencies, and the local Ollama instance are correctly configured:
+### **3. Environment Validation**
+Run the diagnostic script to verify PX4 installations, path configurations, and local LLM connectivity:
 ```bash
 bash setup_check.sh
 ```
 
 ---
 
-## ✈️ Getting Started
+## ✈️ Flight Operations Playbook
 
-### **Step 1: Start the SITL Simulator**
-Launches PX4 SITL and Gazebo Classic (will run headlessly if no `DISPLAY` environment variable is detected to conserve system RAM):
+### **Step 1: Spin up SITL Environment**
+Instantiate the virtual gazebo environment and PX4 stack:
 ```bash
 bash launch_sim.sh
 ```
 
-### **Step 2: Start the Web Dashboard**
-Run the FastAPI application to serve the interactive web panel:
+### **Step 2: Start the Flight Cockpit Backend**
+Launch the FastAPI telemetry relayer and web dashboard:
 ```bash
 python3 web_dashboard/app.py
 ```
-Open your browser and navigate to **`http://localhost:8000`**.
+Open **`http://localhost:8000`** in a browser.
 
-### **Step 3: Run via Command Line (Alternative)**
-You can trigger, validate, and execute prompts directly from the CLI:
+### **Step 3: CLI Direct Execution (Alternative)**
+For scripting or headless environments, use the Python CLI interface:
 ```bash
-# Plan & run a mission interactively
+# Interactively plan and run a mission
 python3 run_mission.py
 
-# Run a specific command immediately
-python3 run_mission.py --prompt "Patrol the perimeter loop at 10m height"
+# Send prompt directly to execution pipeline
+python3 run_mission.py --prompt "Patrol square boundary 15 meters at 10m height"
 
-# Perform a dry-run (generates and validates plan, but does not launch drone)
-python3 run_mission.py --prompt "Take off 15m and land" --dry-run
+# Plan and validate only (does not arm drone)
+python3 run_mission.py --prompt "Takeoff 25m, fly east 30m, and land" --dry-run
 ```
 
 ---
 
-## 🔒 Safety & Failsafes
+## 🔒 Safety Systems & Failsafes
 
-This system implements robust industrial safety protocols:
-* **LLM Isolation:** The LLM generates data, never flight commands. A corrupted or malicious LLM payload cannot bypass the validator.
-* **Geofencing:** Hard-bounded limits in 3D space (`safety_limits.yaml`). If a waypoint lies outside this boundary, the pipeline blocks execution.
-* **Emergency Halt:** The physical/virtual executor supports an instant manual override. Triggering **Hold**, **Return-to-Home (RTH)**, or **Terminate** on the dashboard aborts active mission tasks instantly.
-* **Offboard Loss Recovery:** In the event of command stream interruption, the drone immediately triggers its native PX4 failsafe landing sequence.
-
----
-
-## 📝 License
-
-Distributed under the MIT License. See `LICENSE` for details.
+* **Geofence Enforcement**: If any coordinate in a mission falls outside the radial/altitude geofence defined in `safety_limits.yaml`, the validator blocks execution and reports the violating coordinates.
+* **Active Manual Override**: Telemetry panel includes a hardware interrupt emulator. Pressing **HOLD**, **RTL**, or **LAND** immediately terminates offboard control and hands authority back to native autopilot modes.
+* **Signal Loss Recovery**: If the network connection between the controller and PX4 drops, the autopilot triggers its native PX4 Failsafe (RTL or Land based on configurations).
