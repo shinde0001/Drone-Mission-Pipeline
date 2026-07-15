@@ -48,6 +48,7 @@ pipeline_state = {
     "last_mission": None,
     "last_validation": None,
     "execution_log": [],
+    "drone_logs": [[] for _ in range(5)],
     "telemetry": {
         "connected": False,
         "armed": False,
@@ -140,34 +141,6 @@ async def monitor_battery(drone):
     except Exception as e:
         print(f"Error monitoring battery: {e}")
 
-async def monitor_status_text(drone):
-    try:
-        async for status_text in drone.telemetry.status_text():
-            update_telemetry_timestamp()
-            severity = str(status_text.type)
-            message = status_text.text
-            
-            # Map severity status for UI
-            status_val = "info"
-            if "WARN" in severity or "NOTICE" in severity:
-                status_val = "warning"
-            elif "ERROR" in severity or "CRITICAL" in severity or "EMERGENCY" in severity or "ALERT" in severity:
-                status_val = "error"
-                
-            # Add to execution log
-            pipeline_state["execution_log"].append({
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "elapsed_s": 0.0,
-                "action": "drone_telemetry",
-                "status": status_val,
-                "details": {"message": f"[PX4] {severity}: {message}"},
-            })
-            # Cap the log size to prevent memory leaks
-            if len(pipeline_state["execution_log"]) > 200:
-                pipeline_state["execution_log"] = pipeline_state["execution_log"][-200:]
-    except Exception as e:
-        print(f"Error monitoring status text: {e}")
-
 async def monitor_single_drone_task(drone_idx: int, port: int):
     while True:
         try:
@@ -178,7 +151,7 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                 await asyncio.sleep(2)
                 continue
 
-            drone = System()
+            drone = System(port=50051 + drone_idx)
             await drone.connect(system_address=f"udp://:{port}")
             # wait for connection
             async for state in drone.core.connection_state():
@@ -240,22 +213,42 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                         pipeline_state["telemetry"]["battery_pct"] = pct
                         update_telemetry_timestamp()
 
+            async def run_status_text():
+                try:
+                    async for status_text in drone.telemetry.status_text():
+                        update_telemetry_timestamp()
+                        severity = str(status_text.type)
+                        message = status_text.text
+                        status_val = "info"
+                        if "WARN" in severity or "NOTICE" in severity:
+                            status_val = "warning"
+                        elif "ERROR" in severity or "CRITICAL" in severity or "EMERGENCY" in severity or "ALERT" in severity:
+                            status_val = "error"
+                        
+                        pipeline_state["drone_logs"][drone_idx].append({
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "status": status_val,
+                            "message": f"[PX4] {severity}: {message}"
+                        })
+                        if len(pipeline_state["drone_logs"][drone_idx]) > 100:
+                            pipeline_state["drone_logs"][drone_idx] = pipeline_state["drone_logs"][drone_idx][-100:]
+                except Exception as e:
+                    print(f"Error monitoring status text for drone {drone_idx}: {e}")
+
             async def run_continuous_log():
                 while True:
                     await asyncio.sleep(2.0)
-                    if pipeline_state["telemetry"]["connected"]:
-                        alt = pipeline_state["telemetry"]["altitude_m"]
-                        spd = pipeline_state["telemetry"]["speed_mps"]
-                        hdg = pipeline_state["telemetry"]["heading_deg"]
-                        pipeline_state["execution_log"].append({
+                    if pipeline_state["telemetry"]["drones"][drone_idx]["connected"]:
+                        alt = pipeline_state["telemetry"]["drones"][drone_idx]["altitude_m"]
+                        spd = pipeline_state["telemetry"]["drones"][drone_idx]["speed_mps"]
+                        hdg = pipeline_state["telemetry"]["drones"][drone_idx]["heading_deg"]
+                        pipeline_state["drone_logs"][drone_idx].append({
                             "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "elapsed_s": 0.0,
-                            "action": "drone_telemetry",
                             "status": "info",
-                            "details": {"message": f"[Live Telemetry] Alt: {alt:.1f}m | Speed: {spd:.1f}m/s | Heading: {hdg:.0f}°"},
+                            "message": f"[Live Telemetry] Alt: {alt:.1f}m | Speed: {spd:.1f}m/s | Heading: {hdg:.0f}°"
                         })
-                        if len(pipeline_state["execution_log"]) > 200:
-                            pipeline_state["execution_log"] = pipeline_state["execution_log"][-200:]
+                        if len(pipeline_state["drone_logs"][drone_idx]) > 100:
+                            pipeline_state["drone_logs"][drone_idx] = pipeline_state["drone_logs"][drone_idx][-100:]
 
             tasks = [
                 asyncio.create_task(run_position()),
@@ -263,11 +256,11 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                 asyncio.create_task(run_heading()),
                 asyncio.create_task(run_speed()),
                 asyncio.create_task(run_battery()),
+                asyncio.create_task(run_status_text()),
+                asyncio.create_task(run_continuous_log()),
             ]
             if drone_idx == 0:
                 tasks.append(asyncio.create_task(run_home()))
-                tasks.append(asyncio.create_task(monitor_status_text(drone)))
-                tasks.append(asyncio.create_task(run_continuous_log()))
                 global shared_drone
                 shared_drone = drone
 
@@ -301,6 +294,7 @@ async def startup_event():
     import subprocess
     try:
         subprocess.run(["killall", "-9", "px4", "gzserver", "gzclient", "ruby", "make", "sitl_multiple_run.sh", "mavsdk_server"], capture_output=True)
+        subprocess.run(["fuser", "-k", "-9", "14560/udp", "14561/udp", "14562/udp", "14580/udp", "18570/udp"], capture_output=True)
     except Exception:
         pass
     asyncio.create_task(telemetry_background_task())
@@ -432,6 +426,22 @@ async def validate(body: dict):
 
     pipeline_state["status"] = "validated" if result.valid else "validation_failed"
 
+    if result.valid:
+        mode = pipeline_state.get("current_mode", "standard")
+        num_drones = pipeline_state.get("num_drones", 3)
+        
+        # Only start if not already running in this mode
+        if not (is_simulator_running() and pipeline_state.get("active_sim_mode") == mode and pipeline_state["telemetry"]["connected"]):
+            pipeline_state["telemetry"]["connected"] = False
+            ensure_simulator_running(mode, num_drones)
+            pipeline_state["active_sim_mode"] = mode
+            
+            # Wait for telemetry to connect
+            for _ in range(120):  # Wait up to 60 seconds (120 * 0.5s)
+                if pipeline_state["telemetry"]["connected"]:
+                    break
+                await asyncio.sleep(0.5)
+
     return {
         "success": result.valid,
         "valid": result.valid,
@@ -448,6 +458,7 @@ def ensure_simulator_running(mode="standard", num_drones=3):
     import os
     try:
         subprocess.run(["killall", "-9", "px4", "gzserver", "gzclient", "ruby", "make", "sitl_multiple_run.sh"], capture_output=True)
+        subprocess.run(["fuser", "-k", "-9", "14560/udp", "14561/udp", "14562/udp", "14580/udp", "18570/udp"], capture_output=True)
     except Exception:
         pass
     project_root = Path(__file__).resolve().parent.parent
@@ -472,6 +483,7 @@ def ensure_simulator_running(mode="standard", num_drones=3):
 async def run_mission_background(mission: dict):
     pipeline_state["status"] = "executing"
     pipeline_state["execution_log"] = []
+    pipeline_state["drone_logs"] = [[] for _ in range(5)]
 
     def on_audit_record(entry):
         pipeline_state["execution_log"].append(entry)
@@ -480,30 +492,34 @@ async def run_mission_background(mission: dict):
     mode = pipeline_state.get("current_mode", "standard")
     num_drones = pipeline_state.get("num_drones", 3)
 
-    pipeline_state["telemetry"]["connected"] = False
-    audit_log.record("start_simulator", {"message": f"Starting simulator in '{mode}' mode with {num_drones} drones..."})
-    ensure_simulator_running(mode, num_drones)
-    pipeline_state["active_sim_mode"] = mode
-    
-    # Wait for the simulator to launch and telemetry to connect
-    connected = False
-    for _ in range(240):  # Wait up to 120 seconds (240 * 0.5s)
-        if pipeline_state["telemetry"]["connected"]:
-            connected = True
-            break
-        await asyncio.sleep(0.5)
+    # Check if simulator is already running and connected
+    if is_simulator_running() and pipeline_state["telemetry"]["connected"] and pipeline_state.get("active_sim_mode") == mode:
+        audit_log.record("simulator_connected", {"message": "Simulator already running and connected."})
+    else:
+        pipeline_state["telemetry"]["connected"] = False
+        audit_log.record("start_simulator", {"message": f"Starting simulator in '{mode}' mode with {num_drones} drones..."})
+        ensure_simulator_running(mode, num_drones)
+        pipeline_state["active_sim_mode"] = mode
+        
+        # Wait for the simulator to launch and telemetry to connect
+        connected = False
+        for _ in range(240):  # Wait up to 120 seconds (240 * 0.5s)
+            if pipeline_state["telemetry"]["connected"]:
+                connected = True
+                break
+            await asyncio.sleep(0.5)
 
-    if not connected:
-        pipeline_state["status"] = "error"
-        pipeline_state["execution_log"].append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "elapsed_s": 0.0,
-            "action": "error",
-            "status": "error",
-            "details": {"message": f"Failed to connect to simulator in '{mode}' mode."},
-        })
-        return
-    audit_log.record("simulator_connected", {"message": f"Simulator connected successfully in '{mode}' mode."})
+        if not connected:
+            pipeline_state["status"] = "error"
+            pipeline_state["execution_log"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "elapsed_s": 0.0,
+                "action": "error",
+                "status": "error",
+                "details": {"message": f"Failed to connect to simulator in '{mode}' mode."},
+            })
+            return
+        audit_log.record("simulator_connected", {"message": f"Simulator connected successfully in '{mode}' mode."})
 
     try:
         if mode == "swarm":
@@ -511,12 +527,6 @@ async def run_mission_background(mission: dict):
             # Ensure mission has drone_count from user selection (overrides LLM if different)
             mission["drone_count"] = num_drones
             await execute_swarm_mission(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
-        elif mode == "vision":
-            from src.executors.vision_executor import execute_vision_mission
-            await execute_vision_mission(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
-        elif mode == "slam":
-            from src.executors.slam_executor import execute_slam_mission
-            await execute_slam_mission(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
         else:
             from src.executor import execute_mission_async
             await execute_mission_async(mission, drone=shared_drone, audit=audit_log, telemetry_state=shared_telemetry_state)
@@ -595,6 +605,7 @@ async def terminate_mission():
         pass
     
     pipeline_state["status"] = "idle"
+    pipeline_state["drone_logs"] = [[] for _ in range(5)]
     pipeline_state["execution_log"].append({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "elapsed_s": 0.0,
@@ -759,6 +770,56 @@ async def plan_and_validate(body: dict):
     }
 
 
+@app.get("/api/check-ollama")
+async def check_ollama():
+    """Check if Ollama is installed and/or running, and report disk space."""
+    import shutil
+    import urllib.request
+    
+    ollama_path = shutil.which("ollama")
+    is_installed = ollama_path is not None
+    is_running = False
+    models = []
+    
+    try:
+        req = urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1.0)
+        data = json.loads(req.read().decode())
+        models = [m.get("name") for m in data.get("models", [])]
+        is_running = True
+        is_installed = True
+    except Exception:
+        pass
+
+    usage = shutil.disk_usage("/")
+    free_gb = round(usage.free / (1024**3), 1)
+    
+    return {
+        "installed": is_installed,
+        "running": is_running,
+        "models": models,
+        "free_disk_gb": free_gb,
+        "required_gb": 1.5
+    }
+
+
+@app.post("/api/install-ollama")
+async def install_ollama():
+    """Install Ollama via official installer script using subprocess."""
+    import shutil
+    import subprocess
+    if shutil.which("ollama"):
+        return {"success": True, "message": "Ollama is already installed"}
+        
+    try:
+        proc = subprocess.run(["sh", "-c", "curl -fsSL https://ollama.com/install.sh | sh"], capture_output=True, text=True, timeout=300)
+        if proc.returncode == 0:
+            return {"success": True, "message": "Ollama installed successfully!"}
+        else:
+            return {"success": False, "error": f"Install failed: {proc.stderr or proc.stdout}"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.post("/api/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     """Transcribes an uploaded WAV audio file using speech_recognition."""
@@ -804,6 +865,7 @@ async def telemetry_ws(websocket: WebSocket):
                 "telemetry": pipeline_state["telemetry"],
                 "status": pipeline_state["status"],
                 "execution_log": pipeline_state["execution_log"],
+                "drone_logs": pipeline_state["drone_logs"],
             })
             await asyncio.sleep(0.5)
     except WebSocketDisconnect:
@@ -812,5 +874,15 @@ async def telemetry_ws(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
+    import subprocess
+    import time
+    
+    print("🧹 Cleaning up existing web server processes on port 8000...")
+    try:
+        subprocess.run(["fuser", "-k", "-9", "8000/tcp"], capture_output=True)
+        time.sleep(1)
+    except Exception:
+        pass
+        
     print("🚁 Starting Drone Pipeline Dashboard on http://localhost:8000")
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -313,9 +313,24 @@ def validate_mission(mission: dict) -> ValidationResult:
     logger.info("Starting mission validation...")
 
     vehicle_type = mission.get("vehicle_type", "quadcopter")
-    if vehicle_type in ("swarm", "vision_drone", "slam_drone"):
+    if vehicle_type == "swarm":
         logger.info(f"Using advanced validation path for vehicle type: {vehicle_type}")
+        
+        # Swarm-specific parameters validation
+        spacing = float(mission.get("spacing_m", 5.0))
+        if spacing < 2.0:
+            result.add_warning(f"Swarm spacing ({spacing}m) is tight (<2.0m). Ensure collision guardrails are active.")
+        if spacing < 1.0:
+            result.add_error(f"Swarm spacing ({spacing}m) below minimum safe limit of 1.0m.")
+
+        coll_rad = float(mission.get("collision_radius_m", 1.0))
+        if coll_rad < 0.5:
+            result.add_error(f"Collision avoidance radius ({coll_rad}m) below minimum 0.5m.")
+
         actions = mission.get("actions", [])
+        if not actions and "leader_mission" in mission:
+            actions = mission["leader_mission"].get("actions", [])
+
         if not actions:
             result.add_error("Mission has no actions")
             return result
@@ -323,23 +338,43 @@ def validate_mission(mission: dict) -> ValidationResult:
         # Takeoff check
         if actions[0].get("type") != "takeoff":
             result.add_error("Mission must start with takeoff")
-            
-        # Basic safety limits validation for each action
-        for i, action in enumerate(actions):
-            params = action.get("params", {})
-            alt = params.get("altitude_m")
-            if alt is not None:
-                if alt > limits["max_altitude_m"]:
-                    result.add_error(f"Action {i}: altitude {alt}m exceeds maximum {limits['max_altitude_m']}m")
-                if alt < limits["min_altitude_m"]:
-                    result.add_error(f"Action {i}: altitude {alt}m below minimum {limits['min_altitude_m']}m")
-            
-            speed = params.get("speed_mps")
-            if speed is not None:
-                if speed > limits["max_speed_mps"]:
-                    result.add_error(f"Action {i}: speed {speed} m/s exceeds maximum {limits['max_speed_mps']} m/s")
-                if speed < limits["min_speed_mps"]:
-                    result.add_error(f"Action {i}: speed {speed} m/s below minimum {limits['min_speed_mps']} m/s")
+
+        # Validate leader and follower actions against safety limits
+        all_actions_to_check = [("Leader", actions)]
+        f_config = mission.get("follower_config", {})
+        if f_config:
+            if f_config.get("follower_1", {}).get("independent_actions"):
+                all_actions_to_check.append(("Follower 1", f_config["follower_1"]["independent_actions"]))
+            if f_config.get("follower_2", {}).get("independent_actions"):
+                all_actions_to_check.append(("Follower 2", f_config["follower_2"]["independent_actions"]))
+
+        for role, act_list in all_actions_to_check:
+            for i, action in enumerate(act_list):
+                params = action.get("params", {})
+                alt = params.get("altitude_m")
+                if alt is not None:
+                    if alt > limits["max_altitude_m"]:
+                        result.add_error(f"{role} Action {i}: altitude {alt}m exceeds maximum {limits['max_altitude_m']}m")
+                    if alt < limits["min_altitude_m"]:
+                        result.add_error(f"{role} Action {i}: altitude {alt}m below minimum {limits['min_altitude_m']}m")
+                
+                speed = params.get("speed_mps")
+                if speed is not None:
+                    if speed > limits["max_speed_mps"]:
+                        result.add_error(f"{role} Action {i}: speed {speed} m/s exceeds maximum {limits['max_speed_mps']} m/s")
+                    if speed < limits["min_speed_mps"]:
+                        result.add_error(f"{role} Action {i}: speed {speed} m/s below minimum {limits['min_speed_mps']} m/s")
+
+                n = params.get("north_m", 0.0)
+                e = params.get("east_m", 0.0)
+                dist = math.sqrt(n**2 + e**2)
+                # If follower offset is present, add approximate max offset distance
+                if role == "Leader":
+                    total_dist = dist + spacing
+                else:
+                    total_dist = dist
+                if total_dist > limits["geofence_radius_m"]:
+                    result.add_error(f"{role} Action {i}: destination ({n}m, {e}m) + formation buffer exceeds geofence {limits['geofence_radius_m']}m")
     else:
         schema = load_mission_schema()
         # Layer 1: Schema validation

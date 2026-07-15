@@ -34,30 +34,6 @@ test_cases = {
         "Squad of 3 drones takeoff to 8m, fly wedge formation to north -20m, then land.",
         "Column formation patrol to east 25m at 15m altitude.",
         "Three drones in wedge: fly north 35m, east 15m, loiter 5s, return home."
-    ],
-    "slam": [
-        "Explore the unknown building autonomously.",
-        "Plan autonomous SLAM mapping of the room within 30 meters bounds.",
-        "Map the area from north -40m to 40m and east -40m to 40m for 100 seconds.",
-        "Explore the courtyard, setting boundaries of 50m around home.",
-        "Perform SLAM mapping with a boundary of north -20 to 20m and east -30 to 30m for two minutes.",
-        "Run SLAM exploration for 90 seconds in a 40x40m grid.",
-        "Map the unknown corridor within 15 meters bounds.",
-        "Explore the warehouse area, min N/E -50m, max N/E 50m, duration 150 seconds.",
-        "Autonomous mapping exploration within 10m to 30m north and -10m to 10m east.",
-        "Map the surrounding terrain up to 35m boundary for 60s."
-    ],
-    "vision": [
-        "Find the red car and follow it.",
-        "Track the person moving at north 20m and east 20m.",
-        "Find the red_box target class and follow it for 60 seconds.",
-        "Search for the blue truck and track it.",
-        "Fly to north 10m, search for the target person and follow them.",
-        "Vision track the green box at east 30m, timeout 45 seconds.",
-        "Search and track target class car starting at north 15m, east 15m.",
-        "Find the white box and follow it with vision.",
-        "Find the target package and track it.",
-        "Find the red target sphere and track it for 80s."
     ]
 }
 
@@ -65,7 +41,7 @@ results = []
 success_count = 0
 total_count = 0
 
-print("Running 40 operating mode commands against local LLM pipeline...\n")
+print("Running operating mode commands against local LLM pipeline...\n")
 
 for mode, commands in test_cases.items():
     print(f"=== Testing Mode: {mode.upper()} ===")

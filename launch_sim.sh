@@ -34,6 +34,13 @@ echo -e "${CYAN}║   🚁 PX4 SITL + Gazebo Classic Launcher     ║${NC}"
 echo -e "${CYAN}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
+# ── Cleanup existing processes and ports ──
+echo -e "${YELLOW}🧹 Cleaning up existing simulation processes and ports...${NC}"
+killall -9 px4 gzserver gzclient ruby make sitl_multiple_run.sh 2>/dev/null || true
+fuser -k -9 14560/udp 14561/udp 14562/udp 14580/udp 18570/udp 2>/dev/null || true
+sleep 1
+echo ""
+
 # ── Check PX4 directory ──
 if [ ! -d "$PX4_DIR" ]; then
     echo -e "${RED}❌ PX4-Autopilot not found at ${PX4_DIR}${NC}"
@@ -143,12 +150,6 @@ if [ "$MODE" == "swarm" ]; then
     # Keep script alive until killed
     trap "pkill -x px4; pkill gzclient; pkill gzserver" SIGINT SIGTERM EXIT
     wait $GAZEBO_PID
-elif [ "$MODE" == "vision" ]; then
-    echo -e "${GREEN}Launching Vision Drone (Iris Vision)...${NC}"
-    make px4_sitl gazebo-classic_iris_vision
-elif [ "$MODE" == "slam" ]; then
-    echo -e "${GREEN}Launching SLAM Drone (Iris RPLidar)...${NC}"
-    make px4_sitl gazebo-classic_iris_rplidar
 else
     echo -e "${GREEN}Launching Standard Single Drone headlessly...${NC}"
     make px4_sitl gazebo-classic

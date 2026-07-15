@@ -1,14 +1,19 @@
 """
-swarm_executor.py — Real MAVSDK Multi-Agent Swarm Executor
+swarm_executor.py — Real MAVSDK Multi-Agent Swarm Executor with Real-Time Formation Control
 
-Connects to 3 PX4 instances (ports 14541, 14542, 14543) spawned by Gazebo SITL
-and coordinates them in a Wedge, Line, or Column formation.
+Features:
+- Connects to N PX4 instances (ports 14540, 14541, 14542, ...)
+- FormationController runs a continuous 10Hz control loop for followers (wingmen)
+- Rotates formation offsets dynamically based on leader heading
+- Active 1m collision avoidance via altitude stacking (+1m for Follower 1, -1m for Follower 2)
+- Supports FORMATION, INDEPENDENT, and REGROUP operational modes
 """
 
 import asyncio
 import math
+import time
 from mavsdk import System
-from mavsdk.offboard import PositionNedYaw, OffboardError
+from mavsdk.offboard import PositionNedYaw, VelocityNedYaw, OffboardError
 from ..utils import AuditLog, print_info, print_success, print_error, print_warning, setup_logger
 
 logger = setup_logger("swarm_executor")
@@ -18,37 +23,202 @@ POSITION_CHECK_INTERVAL_S = 0.5
 
 FORMATION_OFFSETS = {
     "wedge": [
-        (0.0, 0.0, 0.0),      # Drone 1 (Leader)
-        (-5.0, -5.0, 0.0),    # Drone 2 (Wingman 1 - left & back)
-        (-5.0, 5.0, 0.0),     # Drone 3 (Wingman 2 - right & back)
+        (-5.0, -5.0, 0.0),    # Wingman 1 (left & back)
+        (-5.0, 5.0, 0.0),     # Wingman 2 (right & back)
     ],
     "line": [
-        (0.0, 0.0, 0.0),      # Drone 1
-        (0.0, -5.0, 0.0),     # Drone 2 (Left)
-        (0.0, 5.0, 0.0),      # Drone 3 (Right)
+        (0.0, -5.0, 0.0),     # Wingman 1 (left)
+        (0.0, 5.0, 0.0),      # Wingman 2 (right)
     ],
     "column": [
-        (0.0, 0.0, 0.0),      # Drone 1
-        (-5.0, 0.0, 0.0),     # Drone 2 (Behind)
-        (-10.0, 0.0, 0.0),    # Drone 3 (Far Behind)
+        (-5.0, 0.0, 0.0),     # Wingman 1 (behind)
+        (-10.0, 0.0, 0.0),    # Wingman 2 (far behind)
     ]
 }
 
+
+class FormationController:
+    """
+    Maintains formation by tracking the leader's real-time position, velocity, and heading,
+    and commanding wingmen at 20Hz with velocity feedforward and collision avoidance.
+    """
+    def __init__(self, leader_drone: System, wingmen: list, offsets: list, collision_radius_m: float = 1.0):
+        self.leader = leader_drone
+        self.wingmen = wingmen
+        self.offsets = offsets
+        self.collision_radius = collision_radius_m
+        self.running = False
+        self.leader_pos = (0.0, 0.0, -10.0)  # (n, e, d)
+        self.leader_vel = (0.0, 0.0, 0.0)    # (vn, ve, vd)
+        self.leader_last_time = time.time()
+        self.leader_heading = 0.0
+        self.all_positions = {}   # drone_idx -> (n, e, d)
+        self.all_velocities = {}  # drone_idx -> (vn, ve, vd)
+        self._tasks = []
+
+    async def start(self):
+        """Start high-frequency telemetry monitoring and 20Hz follower control loops."""
+        if self.running:
+            return
+        self.running = True
+        logger.info("Starting high-frequency (20Hz) FormationController loops...")
+
+        # Request high-frequency (30Hz) telemetry streams on all drones to minimize sensing lag
+        for d in [self.leader] + self.wingmen:
+            try:
+                await d.telemetry.set_rate_position_velocity_ned(30.0)
+                await d.telemetry.set_rate_heading(30.0)
+            except Exception as e:
+                logger.debug(f"Could not set high telemetry rates: {e}")
+
+        # Monitor leader telemetry (position, velocity & heading)
+        self._tasks.append(asyncio.create_task(self._monitor_drone_pos(0, self.leader)))
+        self._tasks.append(asyncio.create_task(self._monitor_leader_heading()))
+
+        # Monitor wingmen positions/velocities and start offboard control
+        for idx, wingman in enumerate(self.wingmen):
+            drone_id = idx + 1
+            self._tasks.append(asyncio.create_task(self._monitor_drone_pos(drone_id, wingman)))
+            await self._init_offboard(wingman)
+            self._tasks.append(asyncio.create_task(self._follower_loop(idx, wingman)))
+
+        print_success("FormationController active (20Hz low-latency tracking + velocity feedforward).")
+
+    async def stop(self):
+        """Stop all control and monitoring loops."""
+        self.running = False
+        for task in self._tasks:
+            task.cancel()
+        self._tasks.clear()
+        for wingman in self.wingmen:
+            try:
+                await wingman.offboard.stop()
+            except Exception:
+                pass
+        logger.info("FormationController stopped.")
+
+    async def _monitor_drone_pos(self, drone_idx: int, drone: System):
+        """Continuously update the NED position and velocity of a drone."""
+        try:
+            async for pos_ned in drone.telemetry.position_velocity_ned():
+                if not self.running:
+                    break
+                n = pos_ned.position.north_m
+                e = pos_ned.position.east_m
+                d = pos_ned.position.down_m
+                vn = pos_ned.velocity.north_m_s
+                ve = pos_ned.velocity.east_m_s
+                vd = pos_ned.velocity.down_m_s
+                self.all_positions[drone_idx] = (n, e, d)
+                self.all_velocities[drone_idx] = (vn, ve, vd)
+                if drone_idx == 0:
+                    self.leader_pos = (n, e, d)
+                    self.leader_vel = (vn, ve, vd)
+                    self.leader_last_time = time.time()
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"Position monitor loop error for drone {drone_idx}: {e}")
+
+    async def _monitor_leader_heading(self):
+        """Continuously update the leader's yaw heading."""
+        try:
+            async for hdg in self.leader.telemetry.heading():
+                if not self.running:
+                    break
+                self.leader_heading = hdg.heading_deg
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"Leader heading monitor error: {e}")
+
+    async def _init_offboard(self, drone: System):
+        """Initialize offboard mode by sending a dummy setpoint first."""
+        try:
+            # Send initial position+velocity setpoint so offboard starts smoothly without jump
+            await drone.offboard.set_position_velocity_ned(
+                PositionNedYaw(0.0, 0.0, -10.0, 0.0),
+                VelocityNedYaw(0.0, 0.0, 0.0, 0.0)
+            )
+            await drone.offboard.start()
+        except OffboardError as oe:
+            if "already active" not in str(oe).lower():
+                logger.warning(f"Offboard init error: {oe}")
+
+    async def _follower_loop(self, wingman_idx: int, wingman: System):
+        """20Hz low-latency control loop for a single wingman with velocity feedforward."""
+        drone_id = wingman_idx + 1
+        try:
+            while self.running:
+                if 0 not in self.all_positions:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                # 1. Dead-reckoning: predict leader position at exact current instant
+                dt = min(0.2, max(0.0, time.time() - self.leader_last_time))
+                pred_leader_n = self.leader_pos[0] + self.leader_vel[0] * dt
+                pred_leader_e = self.leader_pos[1] + self.leader_vel[1] * dt
+                pred_leader_d = self.leader_pos[2] + self.leader_vel[2] * dt
+
+                dx, dy, dz = self.offsets[wingman_idx] if wingman_idx < len(self.offsets) else (-5.0 * (wingman_idx + 1), 0.0, 0.0)
+                cos_h = math.cos(math.radians(self.leader_heading))
+                sin_h = math.sin(math.radians(self.leader_heading))
+
+                # Rotate offset by leader heading
+                rotated_n = dx * cos_h - dy * sin_h
+                rotated_e = dx * sin_h + dy * cos_h
+
+                target_n = pred_leader_n + rotated_n
+                target_e = pred_leader_e + rotated_e
+                target_d = pred_leader_d + dz
+
+                # Collision avoidance (Artificial Potential Field / Altitude Stacking)
+                for other_id, other_pos in self.all_positions.items():
+                    if other_id == drone_id:
+                        continue
+                    horiz_dist = math.sqrt((target_n - other_pos[0])**2 + (target_e - other_pos[1])**2)
+                    if horiz_dist < self.collision_radius:
+                        # Close proximity detected! Apply altitude stacking:
+                        if wingman_idx == 0:
+                            target_d -= 1.0
+                        else:
+                            target_d += 1.0
+
+                # 2. Velocity Feedforward + Lead Correction: eliminate position tracking lag
+                curr_pos = self.all_positions.get(drone_id, (target_n, target_e, target_d))
+                pos_err_n = target_n - curr_pos[0]
+                pos_err_e = target_e - curr_pos[1]
+                pos_err_d = target_d - curr_pos[2]
+
+                target_vn = self.leader_vel[0] + 1.0 * pos_err_n
+                target_ve = self.leader_vel[1] + 1.0 * pos_err_e
+                target_vd = self.leader_vel[2] + 1.0 * pos_err_d
+
+                await wingman.offboard.set_position_velocity_ned(
+                    PositionNedYaw(target_n, target_e, target_d, self.leader_heading),
+                    VelocityNedYaw(target_vn, target_ve, target_vd, self.leader_heading)
+                )
+                await asyncio.sleep(0.05)  # 20Hz control loop
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Follower loop error for wingman {wingman_idx}: {e}")
+
+
 async def connect_drone(port: int, timeout_s: float = 60.0) -> System:
     """Connect to a PX4 instance on the given UDP port with a timeout."""
-    drone = System()
+    drone_idx = port - 14540
+    drone = System(port=50051 + drone_idx)
     addr = f"udp://:{port}"
     logger.info(f"Connecting to drone at {addr}...")
     await drone.connect(system_address=addr)
     
     async def _wait_for_ready():
-        # Wait for connection
         async for state in drone.core.connection_state():
             if state.is_connected:
                 logger.info(f"Drone on port {port} connected!")
                 break
                 
-        # Wait for GPS fix and arming readiness
         async for health in drone.telemetry.health():
             if health.is_global_position_ok and health.is_home_position_ok and health.is_armable:
                 logger.info(f"Drone on port {port} GPS fix OK and armable")
@@ -61,38 +231,28 @@ async def connect_drone(port: int, timeout_s: float = 60.0) -> System:
             
     return drone
 
+
 async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, telemetry_state: dict):
     print_info("Starting Real Swarm Execution...")
     audit.record("swarm_start", {"mission_name": mission.get("mission_name", "swarm_mission")})
     
     formation_name = mission.get("formation", "wedge").lower()
-    # LLM produces "drone_count", but also support "num_drones" as fallback
     num_drones = int(mission.get("drone_count", mission.get("num_drones", 3)))
+    mode = mission.get("mode", "FORMATION").upper()
+    spacing_m = float(mission.get("spacing_m", 5.0))
+    collision_radius_m = float(mission.get("collision_radius_m", 1.0))
     
-    print_info(f"Swarm config: {num_drones} drones, formation={formation_name}")
+    print_info(f"Swarm config: {num_drones} drones, mode={mode}, formation={formation_name}, spacing={spacing_m}m")
     
-    # Generate dynamic offsets based on num_drones
+    # Generate wingmen offsets based on formation and spacing
     if formation_name == "line":
-        offsets = [(0.0, 0.0, 0.0)]
-        for i in range(1, num_drones):
-            sign = -1 if i % 2 == 1 else 1
-            step = (i + 1) // 2
-            offsets.append((0.0, sign * 5.0 * step, 0.0))
+        wingmen_offsets = [(0.0, -spacing_m, 0.0), (0.0, spacing_m, 0.0)]
     elif formation_name == "column":
-        offsets = [(0.0, 0.0, 0.0)]
-        for i in range(1, num_drones):
-            offsets.append((-5.0 * i, 0.0, 0.0))
-    else: # wedge (default)
-        offsets = [(0.0, 0.0, 0.0)]
-        for i in range(1, num_drones):
-            sign = -1 if i % 2 == 1 else 1
-            step = (i + 1) // 2
-            offsets.append((-5.0 * step, sign * 5.0 * step, 0.0))
+        wingmen_offsets = [(-spacing_m, 0.0, 0.0), (-2.0 * spacing_m, 0.0, 0.0)]
+    else:  # wedge (default)
+        wingmen_offsets = [(-spacing_m, -spacing_m, 0.0), (-spacing_m, spacing_m, 0.0)]
             
     # Connect to all drones
-    # PX4 multi-instance: instance i → offboard UDP port 14540+i
-    # Leader = instance 0 → port 14540 (already connected as `drone` param)
-    # Wingmen = instances 1..N-1 → ports 14541, 14542, ...
     try:
         if num_drones > 1:
             print_info(f"Connecting to {num_drones - 1} wingmen on ports {[14540 + i for i in range(1, num_drones)]}...")
@@ -102,151 +262,159 @@ async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, t
             drones = [drone] + list(wingmen)
         else:
             drones = [drone]
+            wingmen = []
         print_success(f"All {num_drones} drones connected and ready!")
     except Exception as e:
         print_error(f"Failed to connect to wingmen drones: {e}")
         audit.record("swarm_error", {"message": f"Connection error: {e}"})
         raise e
         
+    controller = None
     try:
         actions = mission.get("actions", [])
-        for step_idx, action in enumerate(actions):
-            action_type = action.get("type")
-            params = action.get("params", {})
-            
-            print_info(f"Executing step {step_idx + 1}/{len(actions)}: {action_type}")
-            
-            if action_type == "takeoff":
-                alt = params.get("altitude_m", 10)
-                audit.record("swarm_takeoff", {"altitude_m": alt})
+        if not actions and "leader_mission" in mission:
+            actions = mission["leader_mission"].get("actions", [])
+
+        # Step 1: Takeoff (all drones simultaneously)
+        takeoff_action = next((a for a in actions if a.get("type") == "takeoff"), None)
+        alt = takeoff_action["params"].get("altitude_m", 10.0) if takeoff_action else 10.0
+        
+        audit.record("swarm_takeoff", {"altitude_m": alt})
+        print_info("Arming all drones...")
+        await asyncio.gather(*(d.action.arm() for d in drones))
+        print_success("All drones armed.")
+        
+        await asyncio.gather(*(d.action.set_takeoff_altitude(alt) for d in drones))
+        await asyncio.gather(*(d.action.takeoff() for d in drones))
+        print_info("All drones taking off...")
+        
+        while True:
+            alts = []
+            for d in drones:
+                async for pos in d.telemetry.position():
+                    alts.append(pos.relative_altitude_m)
+                    break
+            if len(alts) == len(drones) and all(a >= alt * 0.90 for a in alts):
+                print_success("All drones reached takeoff altitude")
+                break
+            await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
+
+        # Step 2: Start FormationController for FORMATION and REGROUP modes
+        if mode in ("FORMATION", "REGROUP") and len(drones) > 1:
+            controller = FormationController(
+                leader_drone=drones[0],
+                wingmen=drones[1:],
+                offsets=wingmen_offsets,
+                collision_radius_m=collision_radius_m
+            )
+            await controller.start()
+
+        # Step 3: Execute mode-specific navigation
+        if mode == "INDEPENDENT":
+            print_info("Executing INDEPENDENT mode tasks across swarm...")
+            # Run independent paths in parallel
+            async def run_drone_path(d: System, drone_actions: list, label: str):
+                for act in drone_actions:
+                    t = act.get("type")
+                    p = act.get("params", {})
+                    if t == "goto":
+                        n, e, a = p.get("north_m", 0.0), p.get("east_m", 0.0), p.get("altitude_m", alt)
+                        await d.offboard.set_position_ned(PositionNedYaw(n, e, -a, 0.0))
+                        try:
+                            await d.offboard.start()
+                        except OffboardError:
+                            pass
+                        while True:
+                            async for p_ned in d.telemetry.position_velocity_ned():
+                                curr_n = p_ned.position.north_m
+                                curr_e = p_ned.position.east_m
+                                if math.sqrt((curr_n - n)**2 + (curr_e - e)**2) <= WAYPOINT_TOLERANCE_M:
+                                    break
+                            await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
+                    elif t == "loiter":
+                        await asyncio.sleep(p.get("duration_s", 5))
+
+            f_config = mission.get("follower_config", {})
+            f1_actions = f_config.get("follower_1", {}).get("independent_actions") or []
+            f2_actions = f_config.get("follower_2", {}).get("independent_actions") or []
+
+            await asyncio.gather(
+                run_drone_path(drones[0], [a for a in actions if a.get("type") not in ("takeoff", "land", "return_to_launch")], "Leader"),
+                run_drone_path(drones[1], f1_actions, "Follower 1") if len(drones) > 1 else asyncio.sleep(0),
+                run_drone_path(drones[2], f2_actions, "Follower 2") if len(drones) > 2 else asyncio.sleep(0)
+            )
+
+        else:  # FORMATION or REGROUP
+            # Leader navigates waypoints sequentially while followers track via FormationController
+            for step_idx, action in enumerate(actions):
+                action_type = action.get("type")
+                params = action.get("params", {})
                 
-                # Arm all drones
-                print_info("Arming all drones...")
-                await asyncio.gather(*(d.action.arm() for d in drones))
-                print_success("All drones armed.")
+                if action_type in ("takeoff", "land", "return_to_launch"):
+                    continue
                 
-                # Set takeoff altitudes and trigger takeoff
-                # Wingmen fly slightly different altitudes if needed, but same here for simple formation
-                await asyncio.gather(*(d.action.set_takeoff_altitude(alt) for d in drones))
-                await asyncio.gather(*(d.action.takeoff() for d in drones))
-                print_info("All drones taking off...")
+                print_info(f"Leader navigating step {step_idx + 1}/{len(actions)}: {action_type}")
                 
-                # Wait for takeoff completion
-                while True:
-                    alts = []
-                    for idx, d in enumerate(drones):
-                        async for pos in d.telemetry.position():
-                            alts.append(pos.relative_altitude_m)
-                            break
-                    if all(a >= alt * 0.90 for a in alts):
-                        print_success("All drones reached takeoff altitude")
-                        break
-                    await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
-                
-            elif action_type == "goto":
-                leader_n = params.get("north_m", 0.0)
-                leader_e = params.get("east_m", 0.0)
-                leader_alt = params.get("altitude_m", 10.0)
-                
-                audit.record("swarm_goto", {"north_m": leader_n, "east_m": leader_e, "altitude_m": leader_alt})
-                
-                # Calculate headings for rotation of formation if leader is moving
-                heading = math.degrees(math.atan2(leader_e, leader_n)) % 360
-                heading_rad = math.radians(heading)
-                cos_h = math.cos(heading_rad)
-                sin_h = math.sin(heading_rad)
-                
-                targets = []
-                for idx, (dx, dy, dz) in enumerate(offsets):
-                    # Rotate the offsets based on heading to keep formation aligned with path
-                    rotated_n = dx * cos_h - dy * sin_h
-                    rotated_e = dx * sin_h + dy * cos_h
+                if action_type == "goto":
+                    leader_n = params.get("north_m", 0.0)
+                    leader_e = params.get("east_m", 0.0)
+                    leader_alt = params.get("altitude_m", 10.0)
                     
-                    target_n = leader_n + rotated_n
-                    target_e = leader_e + rotated_e
-                    target_d = -(leader_alt + dz)
-                    targets.append((target_n, target_e, target_d, heading))
-                
-                # Send setpoint and start offboard mode for all drones
-                for idx, d in enumerate(drones):
-                    n, e, d_alt, hdg = targets[idx]
-                    await d.offboard.set_position_ned(PositionNedYaw(n, e, d_alt, hdg))
+                    audit.record("swarm_goto", {"north_m": leader_n, "east_m": leader_e, "altitude_m": leader_alt})
                     
-                for idx, d in enumerate(drones):
+                    heading = math.degrees(math.atan2(leader_e, leader_n)) % 360
+                    await drones[0].offboard.set_position_ned(PositionNedYaw(leader_n, leader_e, -leader_alt, heading))
                     try:
-                        await d.offboard.start()
-                    except OffboardError as oe:
-                        if "already active" not in str(oe).lower():
-                            raise oe
-                            
-                # Command target positions continuously
-                for idx, d in enumerate(drones):
-                    n, e, d_alt, hdg = targets[idx]
-                    await d.offboard.set_position_ned(PositionNedYaw(n, e, d_alt, hdg))
-                    
-                # Monitor progress
-                while True:
-                    reached = []
-                    for idx, d in enumerate(drones):
-                        target_n, target_e, target_d, _ = targets[idx]
-                        async for pos in d.telemetry.position():
-                            # We need home position to get NED position
-                            # For simplicity we query home position or calculate relative offset
-                            # Actually, we can get offboard position or NED position from velocity_ned
-                            # telemetry.position() gives lat/lon/alt.
-                            # MAVSDK telemetry has 'position_velocity_ned' which is very convenient!
-                            break
+                        await drones[0].offboard.start()
+                    except OffboardError:
+                        pass
                         
-                        async for pos_ned in d.telemetry.position_velocity_ned():
+                    while True:
+                        async for pos_ned in drones[0].telemetry.position_velocity_ned():
                             curr_n = pos_ned.position.north_m
                             curr_e = pos_ned.position.east_m
-                            dist = math.sqrt((curr_n - target_n)**2 + (curr_e - target_e)**2)
-                            reached.append(dist <= WAYPOINT_TOLERANCE_M)
-                            break
-                            
-                    if all(reached) and len(reached) == len(drones):
-                        print_success("Swarm reached waypoint!")
-                        break
-                    await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
+                            if math.sqrt((curr_n - leader_n)**2 + (curr_e - leader_e)**2) <= WAYPOINT_TOLERANCE_M:
+                                break
+                        await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
+                        
+                    print_success("Leader reached waypoint! Followers synchronized.")
                     
-            elif action_type == "land":
-                audit.record("swarm_land")
-                print_info("Landing all drones...")
-                await asyncio.gather(*(d.action.land() for d in drones))
-                
-                # Wait for disarm
-                while True:
-                    armed_states = []
-                    for d in drones:
-                        async for armed in d.telemetry.armed():
-                            armed_states.append(armed)
-                            break
-                    if not any(armed_states):
-                        print_success("All drones landed and disarmed")
-                        break
-                    await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
-                    
-            elif action_type == "return_to_launch":
-                audit.record("swarm_rtl")
-                print_info("Returning to launch for all drones...")
-                await asyncio.gather(*(d.action.return_to_launch() for d in drones))
-                
-                # Wait for disarm
-                while True:
-                    armed_states = []
-                    for d in drones:
-                        async for armed in d.telemetry.armed():
-                            armed_states.append(armed)
-                            break
-                    if not any(armed_states):
-                        print_success("All drones returned home and disarmed")
-                        break
-                    await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
-                    
+                elif action_type == "loiter":
+                    dur = params.get("duration_s", 5)
+                    print_info(f"Swarm loitering in formation for {dur}s...")
+                    await asyncio.sleep(dur)
+
+        # Step 4: Stop Formation loops before landing
+        if controller:
+            await controller.stop()
+
+        # Step 5: Land / RTL all drones simultaneously
+        last_action = actions[-1] if actions else {}
+        if last_action.get("type") == "return_to_launch":
+            audit.record("swarm_rtl")
+            print_info("Returning to launch for all drones...")
+            await asyncio.gather(*(d.action.return_to_launch() for d in drones))
+        else:
+            audit.record("swarm_land")
+            print_info("Landing all drones...")
+            await asyncio.gather(*(d.action.land() for d in drones))
+            
+        while True:
+            armed_states = []
+            for d in drones:
+                async for armed in d.telemetry.armed():
+                    armed_states.append(armed)
+                    break
+            if not any(armed_states):
+                print_success("All drones landed and disarmed.")
+                break
+            await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
+            
     except Exception as e:
+        if controller:
+            await controller.stop()
         print_error(f"Swarm mission error: {e}")
         audit.record("swarm_error", {"details": str(e)})
-        # Attempt to land all drones safely in case of failure
         print_warning("Emergency landing swarm...")
         await asyncio.gather(*(d.action.land() for d in drones if d))
         raise e

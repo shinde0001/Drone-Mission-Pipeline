@@ -124,41 +124,70 @@ Return ONLY a valid JSON object matching this structure:
 Do NOT include any text before or after the JSON. Output ONLY the JSON object.
 """
 
-SYSTEM_PROMPT_VISION = """You are a vision-tracking drone planner AI. Your job is to interpret 
-commands to find and track a specific target.
-You must produce a mission JSON specifying the target class and search coordinates.
+SWARM_PROMPT_CLEANUP = """You are a drone command preprocessor and state manager. Do two things:
+1. Fix spelling, grammar, and ambiguity in the user's command. Make it clear and concise.
+2. Classify the intent into one of three operational modes:
+   - FORMATION: Drones fly together in a coordinated shape (wedge, line, column, V-shape) following a leader route.
+   - INDEPENDENT: Drones split up or take on independent tasks/routes (e.g. Alpha checks warehouse, Bravo/Charlie sweep perimeter).
+   - REGROUP: Drones rally or converge to a single location from different positions.
 
-Return ONLY a valid JSON object matching this structure:
-{{
-  "mission_name": "<descriptive name>",
-  "vehicle_type": "vision_drone",
-  "target_class": "<object to follow, e.g. red_box, person, car>",
-  "actions": [
-    {{"type": "takeoff", "params": {{"altitude_m": <altitude>}}}},
-    {{"type": "goto", "params": {{"north_m": <n>, "east_m": <e>, "altitude_m": <a>, "speed_mps": <s>}}}},
-    {{"type": "search_and_follow", "params": {{"target": "<target_class>", "timeout_s": <seconds>}}}},
-    {{"type": "return_to_launch", "params": {{}}}}
-  ]
-}}
-Do NOT include any text before or after the JSON. Output ONLY the JSON object.
+Return ONLY a valid JSON object:
+{"cleaned_prompt": "<clear natural language command>", "mode": "FORMATION|INDEPENDENT|REGROUP"}
+Do NOT include any text or markdown before or after the JSON.
 """
 
-SYSTEM_PROMPT_SLAM = """You are an autonomous SLAM exploration drone planner AI. Your job is to interpret 
-commands to explore and map an unknown region.
-You must produce a mission JSON specifying the boundary limits of the exploration.
+SWARM_PROMPT_TASK_SPLIT = """You are a drone swarm commander specializing in Spatial Reasoning and Task Allocation for 3 drones: Leader (Alpha), Follower 1 (Bravo), Follower 2 (Charlie).
+
+Based on the cleaned prompt and operational mode, output structured instructions:
+- If FORMATION: Translate abstract shapes (wedge, line, column) into relative coordinate offsets for followers. Default spacing is 5m.
+  Wedge = Follower 1 [-spacing_m, -spacing_m], Follower 2 [-spacing_m, +spacing_m]
+  Line = Follower 1 [0, -spacing_m], Follower 2 [0, +spacing_m]
+  Column = Follower 1 [-spacing_m, 0], Follower 2 [-2*spacing_m, 0]
+- If INDEPENDENT: Assign specific tasks/routes to Leader, Follower 1, and Follower 2.
+- If REGROUP: Define the rally coordinate offset and the formation to adopt once gathered.
+
+Return ONLY a valid JSON object matching this structure:
+{
+  "leader_task": "<clear instruction for leader drone navigation path or actions>",
+  "follower_task": "<clear instruction summarizing what followers should do>",
+  "formation": "wedge|line|column",
+  "spacing_m": 5,
+  "mode": "FORMATION|INDEPENDENT|REGROUP",
+  "follower_1_offsets": [-5, -5],
+  "follower_2_offsets": [-5, 5],
+  "independent_tasks": null
+}
+Do NOT include any text or markdown before or after the JSON.
+"""
+
+SWARM_PROMPT_FOLLOWER_CONFIG = """You are a follower drone configuration generator for a 3-drone squad.
+The leader drone will execute: {leader_summary}
+The follower task instructions are: {follower_task}
+
+Generate the exact configuration for Follower 1 and Follower 2.
+Followers maintain formation relative to the leader unless assigned independent actions.
 
 Return ONLY a valid JSON object matching this structure:
 {{
-  "mission_name": "<descriptive name>",
-  "vehicle_type": "slam_drone",
-  "explore_area": {{"min_n": <min_n>, "max_n": <max_n>, "min_e": <min_e>, "max_e": <max_e>}},
-  "actions": [
-    {{"type": "takeoff", "params": {{"altitude_m": <altitude>}}}},
-    {{"type": "explore", "params": {{"duration_s": <seconds>}}}},
-    {{"type": "return_to_launch", "params": {{}}}}
-  ]
+  "behavior": "maintain_formation|independent|regroup",
+  "formation": "{formation}",
+  "spacing_m": {spacing_m},
+  "collision_radius_m": 1.0,
+  "altitude_separation_m": 1.0,
+  "follower_1": {{
+    "role": "wingman_left",
+    "offset_north_m": {f1_n},
+    "offset_east_m": {f1_e},
+    "independent_actions": null
+  }},
+  "follower_2": {{
+    "role": "wingman_right",
+    "offset_north_m": {f2_n},
+    "offset_east_m": {f2_e},
+    "independent_actions": null
+  }}
 }}
-Do NOT include any text before or after the JSON. Output ONLY the JSON object.
+Do NOT include any text or markdown before or after the JSON.
 """
 
 # ── Compact system prompt (for small local models like llama3.2:1b) ────
@@ -269,55 +298,17 @@ FEW_SHOT_EXAMPLES_COMPACT = [
     },
 ]
 
-FEW_SHOT_EXAMPLES_VISION = [
-    {
-        "user": "takeoff to 10m, search for the target person at north 15m east 15m and follow them for 30s, then return home",
-        "assistant": json.dumps({
-            "mission_name": "Person Follow Mission",
-            "vehicle_type": "vision_drone",
-            "target_class": "person",
-            "actions": [
-                {"type": "takeoff", "params": {"altitude_m": 10}},
-                {"type": "goto", "params": {"north_m": 15, "east_m": 15, "altitude_m": 10, "speed_mps": 5}},
-                {"type": "search_and_follow", "params": {"target": "person", "timeout_s": 30}},
-                {"type": "return_to_launch", "params": {}}
-            ]
-        })
-    }
-]
-
-FEW_SHOT_EXAMPLES_SLAM = [
-    {
-        "user": "takeoff to 8m, autonomously explore the area between north 0 to 40m and east -20m to 20m for 120 seconds, then return",
-        "assistant": json.dumps({
-            "mission_name": "Autonomous Area Exploration",
-            "vehicle_type": "slam_drone",
-            "explore_area": {"min_n": 0, "max_n": 40, "min_e": -20, "max_e": 20},
-            "actions": [
-                {"type": "takeoff", "params": {"altitude_m": 8}},
-                {"type": "explore", "params": {"duration_s": 120}},
-                {"type": "return_to_launch", "params": {}}
-            ]
-        })
-    }
-]
-
-
 def _build_system_prompt(compact: bool = False, mode: str = "standard", num_drones: int = 3) -> str:
     """Build the full system prompt with current config data.
     
     Args:
         compact: If True, use the shorter prompt suitable for small
                  local models with limited context windows.
-        mode: Operating mode (standard, swarm, slam, vision)
+        mode: Operating mode (standard, swarm)
         num_drones: Number of drones in swarm mode
     """
     if mode == "swarm":
         return SYSTEM_PROMPT_SWARM.format(num_drones=num_drones)
-    elif mode == "vision":
-        return SYSTEM_PROMPT_VISION
-    elif mode == "slam":
-        return SYSTEM_PROMPT_SLAM
 
     safety = load_safety_limits()
 
@@ -380,10 +371,6 @@ def _build_few_shot_messages(system_prompt: str, user_prompt: str, compact: bool
                 })
             }
         ]
-    elif mode == "vision":
-        examples = FEW_SHOT_EXAMPLES_VISION
-    elif mode == "slam":
-        examples = FEW_SHOT_EXAMPLES_SLAM
     else:
         examples = FEW_SHOT_EXAMPLES_COMPACT if compact else FEW_SHOT_EXAMPLES_FULL
     
@@ -403,7 +390,7 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
 
     Args:
         prompt: Natural-language instruction from the operator.
-        mode: The operating mode (standard, swarm, slam, vision)
+        mode: The operating mode (standard, swarm)
         ai_engine: 'offline' or 'online'
         api_key: Optional API key for online engines.
         num_drones: Number of drones in swarm mode
@@ -428,6 +415,9 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
     p_lower = p_lower.replace("lenght", "length")
     prompt = p_lower
     
+    if mode == "swarm":
+        return plan_swarm_mission(prompt, ai_engine=ai_engine, api_key=api_key, num_drones=num_drones)
+
     if ai_engine == "offline":
         # Ensure Ollama is running first (attempt to auto-start if not)
         import urllib.request
@@ -490,16 +480,27 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
             except Exception as e:
                 raise RuntimeError(f"Failed to pull Ollama model '{model_name}': {e}")
 
-    if ai_engine == "online":
-        print_info("Using online LLM via Gemini 3.5 Flash.")
-        logger.info("Using online LLM via Gemini 3.5 Flash.")
-        import google.generativeai as genai
+    if ai_engine.startswith("online"):
+        if ai_engine == "online_lite":
+            print_info("Using online LLM via Gemini 3.1 Flash Lite.")
+            logger.info("Using online LLM via Gemini 3.1 Flash Lite.")
+            model_name = "gemini-3.1-flash-lite"
+        elif ai_engine == "online_pro":
+            print_info("Using online LLM via Gemini 2.5 Pro.")
+            logger.info("Using online LLM via Gemini 2.5 Pro.")
+            model_name = "gemini-2.5-pro"
+        else:
+            print_info("Using online LLM via Gemini 3.5 Flash.")
+            logger.info("Using online LLM via Gemini 3.5 Flash.")
+            model_name = "gemini-3.5-flash"
+            
+        from google import genai
+        from google.genai import types
         # Prefer the explicitly passed api_key, fallback to environment variable
         actual_api_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not actual_api_key:
             raise RuntimeError("GEMINI_API_KEY is missing. Please provide it in the UI or set the environment variable.")
-        genai.configure(api_key=actual_api_key)
-        model_name = "gemini-3.5-flash"
+        gemini_client = genai.Client(api_key=actual_api_key)
         is_local = False
     else:
         print_info("Using local LLM via Ollama.")
@@ -534,15 +535,12 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
             logger.warning(f"Retry attempt {attempt}/{max_attempts}")
 
         try:
-            if ai_engine == "online":
+            if ai_engine.startswith("online"):
                 # For Gemini: convert few-shot messages into multi-turn conversation
-                model = genai.GenerativeModel(
-                    model_name=model_name,
+                config = types.GenerateContentConfig(
                     system_instruction=system_prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.1,
-                        response_mime_type="application/json",
-                    )
+                    temperature=0.1,
+                    response_mime_type="application/json",
                 )
                 # Build Gemini conversation history from few-shot examples
                 if mode == "swarm":
@@ -563,19 +561,15 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
                             })
                         }
                     ]
-                elif mode == "vision":
-                    examples = FEW_SHOT_EXAMPLES_VISION
-                elif mode == "slam":
-                    examples = FEW_SHOT_EXAMPLES_SLAM
                 else:
                     examples = FEW_SHOT_EXAMPLES_FULL
                 
                 gemini_history = []
                 for ex in examples:
-                    gemini_history.append({"role": "user", "parts": [ex["user"]]})
-                    gemini_history.append({"role": "model", "parts": [ex["assistant"]]})
+                    gemini_history.append({"role": "user", "parts": [{"text": ex["user"]}]})
+                    gemini_history.append({"role": "model", "parts": [{"text": ex["assistant"]}]})
                 
-                chat = model.start_chat(history=gemini_history)
+                chat = gemini_client.chats.create(model=model_name, config=config, history=gemini_history)
                 response = chat.send_message(prompt)
                 raw_content = response.text
             else:
@@ -845,3 +839,340 @@ def _extract_mission_json(raw_content: str, is_local: bool, mode: str = "standar
             return parsed
 
     return None
+
+
+def _setup_llm_client(ai_engine: str, api_key: str = None):
+    """Setup and return (client, gemini_client, model_name, is_local)."""
+    import urllib.request
+    import subprocess
+    import time
+    import shutil
+
+    if ai_engine == "offline":
+        model_name = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
+
+        def is_ollama_running():
+            try:
+                urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1.0)
+                return True
+            except Exception:
+                return False
+
+        def is_ollama_model_available(model):
+            try:
+                req = urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1.0)
+                data = json.loads(req.read().decode())
+                for m in data.get("models", []):
+                    if m.get("name") == model or m.get("name") == model + ":latest":
+                        return True
+                return False
+            except Exception:
+                return False
+
+        if not is_ollama_running():
+            logger.warning("Ollama is not running. Attempting to start it automatically...")
+            try:
+                ollama_path = shutil.which("ollama")
+                if ollama_path:
+                    subprocess.Popen([ollama_path, "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    for _ in range(10):
+                        time.sleep(1.0)
+                        if is_ollama_running():
+                            logger.info("Ollama started successfully.")
+                            break
+            except Exception as e:
+                logger.error(f"Failed to start Ollama automatically: {e}")
+
+        if not is_ollama_running():
+            raise RuntimeError(
+                "Ollama server is not running or unreachable on http://127.0.0.1:11434. "
+                "Please start it manually using 'ollama serve'."
+            )
+
+        if not is_ollama_model_available(model_name):
+            logger.warning(f"Ollama model '{model_name}' not found locally. Pulling it now...")
+            try:
+                ollama_path = shutil.which("ollama")
+                subprocess.run([ollama_path, "pull", model_name], check=True)
+                logger.info(f"Model '{model_name}' pulled successfully.")
+            except Exception as e:
+                raise RuntimeError(f"Failed to pull Ollama model '{model_name}': {e}")
+
+        client = OpenAI(
+            base_url='http://127.0.0.1:11434/v1',
+            api_key='ollama',
+        )
+        return client, None, model_name, True
+
+    elif ai_engine.startswith("online"):
+        if ai_engine == "online_lite":
+            model_name = "gemini-3.1-flash-lite"
+        elif ai_engine == "online_pro":
+            model_name = "gemini-2.5-pro"
+        else:
+            model_name = "gemini-3.5-flash"
+
+        from google import genai
+        from google.genai import types
+        actual_api_key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not actual_api_key:
+            raise RuntimeError("GEMINI_API_KEY is missing. Please provide it in the UI or set the environment variable.")
+        gemini_client = genai.Client(api_key=actual_api_key)
+        return None, gemini_client, model_name, False
+    else:
+        raise ValueError(f"Unknown ai_engine: {ai_engine}")
+
+
+def _extract_json_dict(raw_content: str) -> dict | None:
+    """Extract a general JSON dict from raw string."""
+    if not raw_content or not raw_content.strip():
+        return None
+
+    strategies = [
+        raw_content.strip(),
+    ]
+    fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', raw_content, re.DOTALL)
+    if fence_match:
+        strategies.append(fence_match.group(1).strip())
+
+    brace_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
+    if brace_match:
+        strategies.append(brace_match.group(0).strip())
+
+    for candidate in strategies:
+        try:
+            cleaned = re.sub(r'//.*', '', candidate)
+            cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+            cleaned = re.sub(r',\s*([\]}])', r'\1', cleaned)
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return None
+
+
+def _call_llm_json(system_prompt: str, user_prompt: str, few_shot_examples: list, ai_engine: str, model_name: str, client, gemini_client, is_local: bool) -> dict | None:
+    """Executes a single LLM call with retries and extracts a JSON dictionary."""
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if ai_engine.startswith("online"):
+                from google.genai import types
+                config = types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                )
+                gemini_history = []
+                for ex in few_shot_examples:
+                    gemini_history.append({"role": "user", "parts": [{"text": ex["user"]}]})
+                    gemini_history.append({"role": "model", "parts": [{"text": ex["assistant"]}]})
+                
+                chat = gemini_client.chats.create(model=model_name, config=config, history=gemini_history)
+                response = chat.send_message(user_prompt)
+                raw_content = response.text
+            else:
+                messages = [{"role": "system", "content": system_prompt}]
+                for ex in few_shot_examples:
+                    messages.append({"role": "user", "content": ex["user"]})
+                    messages.append({"role": "assistant", "content": ex["assistant"]})
+                messages.append({"role": "user", "content": user_prompt})
+
+                if is_local:
+                    _touch_ollama()
+
+                api_kwargs = dict(
+                    model=model_name,
+                    messages=messages,
+                    temperature=0.1,
+                    max_tokens=1500,
+                    extra_body={"num_ctx": 4096},
+                    response_format={"type": "json_object"}
+                )
+                response = client.chat.completions.create(**api_kwargs)
+                raw_content = response.choices[0].message.content
+
+            if is_local:
+                _touch_ollama()
+
+            parsed = _extract_json_dict(raw_content)
+            if parsed is not None:
+                return parsed
+            logger.warning(f"Attempt {attempt}: Could not extract JSON dict from response: {raw_content[:200]}")
+        except Exception as e:
+            logger.warning(f"LLM call attempt {attempt} failed: {e}")
+            if attempt == max_attempts:
+                logger.error(f"All {max_attempts} attempts failed for LLM call.")
+    return None
+
+
+def plan_swarm_mission(prompt: str, ai_engine: str = "offline", api_key: str = None, num_drones: int = 3) -> dict:
+    """
+    4-stage sequential LLM prompting chain for multi-agent swarm missions.
+    All 4 calls use the same model selected by `ai_engine`.
+    """
+    logger.info(f"Starting 4-stage swarm mission planning for prompt: '{prompt}'")
+    client, gemini_client, model_name, is_local = _setup_llm_client(ai_engine, api_key)
+
+    # ── Call 1: Prompt Cleanup & Intent Classification ──
+    logger.info("Swarm Stage 1/4: Prompt Cleanup & Intent Classification...")
+    ex_cleanup = [
+        {
+            "user": "three drone wedge patrol north 40m east 10m",
+            "assistant": json.dumps({"cleaned_prompt": "Three drones patrol in a wedge formation 40 meters north and 10 meters east.", "mode": "FORMATION"})
+        },
+        {
+            "user": "alpha inspect roof, bravo and charlie sweep perimeter loop",
+            "assistant": json.dumps({"cleaned_prompt": "Leader (Alpha) inspects the roof at altitude 15m. Follower 1 (Bravo) and Follower 2 (Charlie) sweep the perimeter loop.", "mode": "INDEPENDENT"})
+        },
+        {
+            "user": "everyone rally and regroup at central tower north 20m east 20m",
+            "assistant": json.dumps({"cleaned_prompt": "All three drones converge and rally at north 20 meters, east 20 meters in a wedge formation.", "mode": "REGROUP"})
+        }
+    ]
+    res_cleanup = _call_llm_json(SWARM_PROMPT_CLEANUP, prompt, ex_cleanup, ai_engine, model_name, client, gemini_client, is_local)
+    if res_cleanup:
+        cleaned_prompt = res_cleanup.get("cleaned_prompt", prompt)
+        mode = res_cleanup.get("mode", "FORMATION").upper()
+        if mode not in ("FORMATION", "INDEPENDENT", "REGROUP"):
+            mode = "FORMATION"
+    else:
+        cleaned_prompt = prompt
+        mode = "FORMATION"
+    logger.info(f"Swarm Stage 1 Result: mode={mode}, cleaned='{cleaned_prompt}'")
+
+    # ── Call 2: Task Allocation & Spatial Reasoning ──
+    logger.info("Swarm Stage 2/4: Task Allocation & Spatial Reasoning...")
+    ex_split = [
+        {
+            "user": "Command: Three drones patrol in a wedge formation 40 meters north and 10 meters east.\nOperational Mode: FORMATION",
+            "assistant": json.dumps({
+                "leader_task": "Takeoff to 12m, fly north 40m east 10m at 5 m/s, loiter 5s, then land.",
+                "follower_task": "Maintain wedge formation relative to the leader throughout the flight.",
+                "formation": "wedge",
+                "spacing_m": 5,
+                "mode": "FORMATION",
+                "follower_1_offsets": [-5, -5],
+                "follower_2_offsets": [-5, 5],
+                "independent_tasks": None
+            })
+        },
+        {
+            "user": "Command: Leader (Alpha) inspects the roof at altitude 15m. Follower 1 (Bravo) and Follower 2 (Charlie) sweep the perimeter loop.\nOperational Mode: INDEPENDENT",
+            "assistant": json.dumps({
+                "leader_task": "Takeoff to 15m, fly to north 20m east 0m and loiter 15 seconds, then land.",
+                "follower_task": "Follower 1 flies north 0m east 25m; Follower 2 flies north 0m east -25m.",
+                "formation": "wedge",
+                "spacing_m": 5,
+                "mode": "INDEPENDENT",
+                "follower_1_offsets": [-5, -5],
+                "follower_2_offsets": [-5, 5],
+                "independent_tasks": [
+                    {"drone": "follower_1", "waypoints": [{"north_m": 0, "east_m": 25, "altitude_m": 12, "speed_mps": 5}]},
+                    {"drone": "follower_2", "waypoints": [{"north_m": 0, "east_m": -25, "altitude_m": 12, "speed_mps": 5}]}
+                ]
+            })
+        }
+    ]
+    res_split = _call_llm_json(SWARM_PROMPT_TASK_SPLIT, f"Command: {cleaned_prompt}\nOperational Mode: {mode}", ex_split, ai_engine, model_name, client, gemini_client, is_local)
+    if res_split:
+        task_split = res_split
+    else:
+        task_split = {
+            "leader_task": cleaned_prompt,
+            "follower_task": f"Maintain wedge formation behind the leader.",
+            "formation": "wedge",
+            "spacing_m": 5,
+            "mode": mode,
+            "follower_1_offsets": [-5, -5],
+            "follower_2_offsets": [-5, 5],
+            "independent_tasks": None
+        }
+    logger.info(f"Swarm Stage 2 Result: formation={task_split.get('formation')}, spacing={task_split.get('spacing_m')}m")
+
+    # ── Call 3: Leader Mission JSON Generator ──
+    logger.info("Swarm Stage 3/4: Leader Mission JSON Generation...")
+    leader_task_prompt = task_split.get("leader_task") or cleaned_prompt
+    leader_mission = plan_mission(leader_task_prompt, mode="standard", ai_engine=ai_engine, api_key=api_key, num_drones=1)
+    logger.info(f"Swarm Stage 3 Result: Leader mission generated with {len(leader_mission.get('actions', []))} actions.")
+
+    # ── Call 4: Follower Config Generator ──
+    logger.info("Swarm Stage 4/4: Follower Config Generation...")
+    f_input = (
+        f"Leader Mission Summary: {json.dumps(leader_mission.get('actions', []))}\n"
+        f"Follower Task Instructions: {task_split.get('follower_task', '')}\n"
+        f"Requested Mode: {mode}\n"
+        f"Formation Shape: {task_split.get('formation', 'wedge')}\n"
+        f"Spacing (m): {task_split.get('spacing_m', 5)}"
+    )
+    ex_fconfig = [
+        {
+            "user": "Leader Mission Summary: [{\"type\": \"takeoff\", \"params\": {\"altitude_m\": 12}}, {\"type\": \"goto\", \"params\": {\"north_m\": 40, \"east_m\": 10, \"altitude_m\": 12, \"speed_mps\": 5}}, {\"type\": \"land\", \"params\": {}}]\nFollower Task Instructions: Maintain wedge formation relative to the leader throughout the flight.\nRequested Mode: FORMATION\nFormation Shape: wedge\nSpacing (m): 5",
+            "assistant": json.dumps({
+                "behavior": "maintain_formation",
+                "formation": "wedge",
+                "spacing_m": 5,
+                "collision_radius_m": 1.0,
+                "altitude_separation_m": 1.0,
+                "follower_1": {
+                    "role": "wingman_left",
+                    "offset_north_m": -5,
+                    "offset_east_m": -5,
+                    "independent_actions": None
+                },
+                "follower_2": {
+                    "role": "wingman_right",
+                    "offset_north_m": -5,
+                    "offset_east_m": 5,
+                    "independent_actions": None
+                }
+            })
+        }
+    ]
+    res_fconfig = _call_llm_json(SWARM_PROMPT_FOLLOWER_CONFIG, f_input, ex_fconfig, ai_engine, model_name, client, gemini_client, is_local)
+    if res_fconfig:
+        follower_config = res_fconfig
+    else:
+        f1_off = task_split.get("follower_1_offsets", [-5, -5])
+        f2_off = task_split.get("follower_2_offsets", [-5, 5])
+        follower_config = {
+            "behavior": "maintain_formation" if mode == "FORMATION" else mode.lower(),
+            "formation": task_split.get("formation", "wedge"),
+            "spacing_m": task_split.get("spacing_m", 5),
+            "collision_radius_m": 1.0,
+            "altitude_separation_m": 1.0,
+            "follower_1": {
+                "role": "wingman_left",
+                "offset_north_m": f1_off[0] if isinstance(f1_off, list) and len(f1_off) >= 2 else -5,
+                "offset_east_m": f1_off[1] if isinstance(f1_off, list) and len(f1_off) >= 2 else -5,
+                "independent_actions": task_split.get("independent_tasks")
+            },
+            "follower_2": {
+                "role": "wingman_right",
+                "offset_north_m": f2_off[0] if isinstance(f2_off, list) and len(f2_off) >= 2 else -5,
+                "offset_east_m": f2_off[1] if isinstance(f2_off, list) and len(f2_off) >= 2 else 5,
+                "independent_actions": task_split.get("independent_tasks")
+            }
+        }
+    logger.info("Swarm Stage 4 Result: Follower config complete.")
+
+    return {
+        "mission_name": leader_mission.get("mission_name", "Swarm Multi-Agent Mission"),
+        "vehicle_type": "swarm",
+        "drone_count": num_drones,
+        "formation": task_split.get("formation", "wedge").lower(),
+        "spacing_m": float(task_split.get("spacing_m", 5)),
+        "collision_radius_m": float(follower_config.get("collision_radius_m", 1.0)),
+        "mode": mode,
+        "leader_mission": leader_mission,
+        "follower_config": follower_config,
+        "actions": leader_mission.get("actions", []),
+        "llm_stages": {
+            "cleanup": {"cleaned_prompt": cleaned_prompt, "mode": mode},
+            "task_split": task_split,
+            "leader_json": leader_mission,
+            "follower_config": follower_config
+        }
+    }
+

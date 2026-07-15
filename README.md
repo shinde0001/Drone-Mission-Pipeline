@@ -63,10 +63,8 @@ No AI-generated mission can bypass this module. Every JSON payload is processed 
 
 | Mode | Technology | Description |
 | :--- | :--- | :--- |
-| **Standard Pipeline** | MAVSDK Position Control | Evaluates, translates, and flies structured trajectories. |
-| **Swarm Control** | Multi-agent MAVSDK | Synchronizes up to 5 drones using geometric formation constraints (Line, Wedge, Column). |
-| **SLAM & Mapping** | ROS 2 / Laser Scan | Autonomous boundary exploration with occupancy grid mapping. |
-| **Vision Follower** | YOLOv8 + Visual Servoing | Leverages local YOLOv8 neural network inference to dynamically follow objects (person, car) on Gazebo's camera stream. |
+| **Standard Single Drone** | MAVSDK Position Control | Evaluates, translates, and flies structured single-drone trajectories. |
+| **Multi-Agent Swarm** | 4-Stage LLM Chain + 10Hz `FormationController` | Synchronizes a fixed 3-drone squad (`Leader Alpha`, `Follower 1 Bravo`, `Follower 2 Charlie`) with dynamic heading-rotated formation tracking and 1.0m altitude-stacking collision avoidance across `FORMATION`, `INDEPENDENT`, and `REGROUP` modes. |
 
 ---
 
@@ -76,8 +74,9 @@ No AI-generated mission can bypass this module. Every JSON payload is processed 
 drone_pipeline/
 ├── README.md                      # Project documentation
 ├── requirements.txt               # Python package dependencies
+├── setup.sh                       # One-click client dependency installation script
 ├── setup_check.sh                 # Environment compatibility verification script
-├── launch_sim.sh                  # PX4 SITL & Gazebo launch orchestrator
+├── launch_sim.sh                  # PX4 SITL & Gazebo launch orchestrator (supports --mode swarm)
 ├── run_mission.py                 # CLI entrypoint for mission execution
 │
 ├── config/
@@ -86,18 +85,16 @@ drone_pipeline/
 │   └── waypoint_library.yaml      # Static route libraries and waypoint presets
 │
 ├── src/
-│   ├── llm_planner.py             # Translates operator prompt -> mission JSON
-│   ├── mission_validator.py       # Enforces schema validation and safety guardrails
-│   ├── executor.py                # Translates mission JSON -> MAVSDK drone commands
+│   ├── llm_planner.py             # 4-stage sequential LLM planner (Intent, Task Split, Leader, Follower)
+│   ├── mission_validator.py       # Enforces schema validation and swarm safety guardrails
+│   ├── executor.py                # Translates mission JSON -> MAVSDK single-drone commands
 │   ├── executors/
-│   │   ├── swarm_executor.py      # Controls multi-agent swarming formations
-│   │   ├── slam_executor.py       # Runs autonomous exploration and mapping
-│   │   └── vision_executor.py     # Performs visual servoing (YOLOv8 target follow)
+│   │   └── swarm_executor.py      # 10Hz FormationController with dynamic heading rotation & collision avoidance
 │   └── utils.py                   # Parsing helpers, configurations, and audit loggers
 │
 └── web_dashboard/
-    ├── app.py                     # FastAPI web server and WebSocket telemetry relayer
-    ├── index.html                 # UI cockpit layout
+    ├── app.py                     # FastAPI web server, process auto-cleanup, and Ollama auto-installer
+    ├── index.html                 # UI cockpit with multi-stage LLM tab breakdown and 3-drone map canvas
     └── style.css                  # Modern dark-mode UI styles
 ```
 
@@ -118,7 +115,8 @@ Clone the repository and install requirements:
 ```bash
 git clone https://github.com/shinde0001/Drone-Mission-Pipeline.git
 cd Drone-Mission-Pipeline
-pip3 install -r requirements.txt
+bash setup.sh
+# Or manually install with: pip3 install -r requirements.txt
 ```
 
 ### **3. Environment Validation**

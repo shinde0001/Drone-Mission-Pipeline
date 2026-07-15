@@ -19,10 +19,10 @@
         --surface2:     #f5f8f5;
         --border:       #cddacd;
         --border-2:     #a8c1a8;
-        --green:        #16a34a;
-        --green-d:      #14532d;
-        --green-l:      #dcfce7;
-        --green-glow:   0 0 0 3px rgba(22,163,74,0.15);
+        --orange:        #f97316;
+        --orange-d:      #9a3412;
+        --orange-l:      #ffedd5;
+        --orange-glow:   0 0 0 3px rgba(249,115,22,0.15);
         --text:         #0d1f0d;
         --text2:        #2d4a2d;
         --text3:        #5a7a5a;
@@ -51,19 +51,19 @@
         position:sticky; top:0; z-index:200;
         height:58px; padding:0 28px;
         background:var(--surface);
-        border-bottom:2.5px solid var(--green);
+        border-bottom:2.5px solid var(--orange);
         display:flex; align-items:center; justify-content:space-between;
         box-shadow:0 2px 8px rgba(0,40,0,0.08);
     }
     .header-left { display:flex; align-items:center; gap:12px; }
     .header-logo {
         width:36px; height:36px; border-radius:8px;
-        background:linear-gradient(135deg,#16a34a,#15803d);
+        background:linear-gradient(135deg,#f97316,#ea580c);
         display:flex; align-items:center; justify-content:center;
-        font-size:18px; box-shadow:0 2px 8px rgba(22,163,74,0.3);
+        font-size:18px; box-shadow:0 2px 8px rgba(249,115,22,0.3);
         flex-shrink:0;
     }
-    .header-title { font-size:16px; font-weight:800; color:var(--green-d); letter-spacing:-0.3px; }
+    .header-title { font-size:16px; font-weight:800; color:var(--orange-d); letter-spacing:-0.3px; }
     .header-subtitle { font-size:11px; color:var(--text3); font-family:'JetBrains Mono',monospace; margin-top:1px; }
     .status-badge {
         display:flex; align-items:center; gap:7px;
@@ -71,7 +71,7 @@
         background:var(--surface2); border:1px solid var(--border);
         font-size:12px; font-weight:600; color:var(--text2);
     }
-    .status-dot { width:7px; height:7px; border-radius:50%; background:var(--green); animation:pulse 2s infinite; }
+    .status-dot { width:7px; height:7px; border-radius:50%; background:var(--orange); animation:pulse 2s infinite; }
     .status-dot.error { background:var(--red); }
     .status-dot.warning { background:var(--amber); }
     @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.5;transform:scale(.75)} }
@@ -94,13 +94,13 @@
     .card:hover { border-color:var(--border-2); box-shadow:var(--shadow); }
     .card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; }
     .card-title { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:var(--text2); }
-    .card-title svg { width:15px; height:15px; color:var(--green); }
+    .card-title svg { width:15px; height:15px; color:var(--orange); }
     .card-title .icon { font-size:15px; }
     .card-badge { padding:2px 9px; border-radius:99px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; }
     .badge-stage1 { background:var(--blue-l); color:var(--blue); }
     .badge-stage2 { background:var(--amber-l); color:var(--amber); }
-    .badge-stage3 { background:var(--green-l); color:var(--green-d); }
-    .badge-success { background:var(--green-l); color:var(--green-d); }
+    .badge-stage3 { background:var(--orange-l); color:var(--orange-d); }
+    .badge-success { background:var(--orange-l); color:var(--orange-d); }
     .badge-error   { background:var(--red-l); color:var(--red); }
 
     /* ── FULL-WIDTH SPANS ── */
@@ -119,13 +119,13 @@
         background:var(--surface2); font-size:12px; font-weight:600; color:var(--text3);
         transition:all var(--t); cursor:default;
     }
-    .pipeline-step.active  { border-color:var(--green); background:var(--green-l); color:var(--green-d); box-shadow:var(--green-glow); }
-    .pipeline-step.completed { border-color:var(--green); background:var(--green); color:#fff; }
+    .pipeline-step.active  { border-color:var(--orange); background:var(--orange-l); color:var(--orange-d); box-shadow:var(--orange-glow); }
+    .pipeline-step.completed { border-color:var(--orange); background:var(--orange); color:#fff; }
     .pipeline-step.error   { border-color:var(--red); background:var(--red-l); color:var(--red); }
     .pipeline-step-icon { font-size:14px; }
     .pipeline-step-label { font-size:12px; font-weight:600; }
     .pipeline-arrow { color:var(--border-2); font-size:14px; padding:0 5px; font-weight:800; }
-    .pipeline-arrow.completed { color:var(--green); }
+    .pipeline-arrow.completed { color:var(--orange); }
 
     /* ── MODE SELECTOR ── */
     .mode-selector { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-l); padding:14px 18px; box-shadow:var(--shadow-s); }
@@ -138,8 +138,8 @@
         font-size:13px; font-weight:500; color:var(--text2);
         transition:all var(--t); user-select:none;
     }
-    .mode-option:hover { border-color:var(--green); background:var(--green-l); color:var(--green-d); }
-    .mode-option input[type="radio"] { accent-color:var(--green); }
+    .mode-option:hover { border-color:var(--orange); background:var(--orange-l); color:var(--orange-d); }
+    .mode-option input[type="radio"] { accent-color:var(--orange); }
     .mode-warning { font-size:12px; color:var(--amber); background:var(--amber-l); border:1px solid #fcd34d; border-radius:var(--radius-s); padding:6px 12px; margin-top:10px; }
 
     /* ── PROMPT CARD ── */
@@ -153,16 +153,16 @@
         transition:border-color var(--t), box-shadow var(--t);
     }
     .prompt-input::placeholder { color:var(--text3); }
-    .prompt-input:focus { border-color:var(--green); box-shadow:var(--green-glow); background:var(--surface); }
+    .prompt-input:focus { border-color:var(--orange); box-shadow:var(--orange-glow); background:var(--surface); }
     .submit-btn {
-        padding:0 20px; background:var(--green); color:#fff; border:none;
+        padding:0 20px; background:var(--orange); color:#fff; border:none;
         border-radius:var(--radius); font-family:'Inter',sans-serif; font-size:13px; font-weight:700;
         cursor:pointer; white-space:nowrap; display:flex; align-items:center; gap:7px;
-        box-shadow:0 2px 8px rgba(22,163,74,0.35);
+        box-shadow:0 2px 8px rgba(249,115,22,0.35);
         transition:background var(--t), transform var(--t), box-shadow var(--t);
         min-height:44px;
     }
-    .submit-btn:hover { background:var(--green-d); transform:translateY(-1px); box-shadow:0 5px 16px rgba(22,163,74,0.4); }
+    .submit-btn:hover { background:var(--orange-d); transform:translateY(-1px); box-shadow:0 5px 16px rgba(249,115,22,0.4); }
     .submit-btn:disabled { opacity:.4; cursor:not-allowed; transform:none; }
     .submit-btn svg { width:16px; height:16px; }
 
@@ -173,7 +173,7 @@
         font-size:1.1rem; transition:all var(--t); min-width:46px; min-height:44px;
         display:flex; align-items:center; justify-content:center;
     }
-    #micBtn:hover { border-color:var(--green); background:var(--green-l); }
+    #micBtn:hover { border-color:var(--orange); background:var(--orange-l); }
 
     /* ── EXAMPLE CHIPS ── */
     .examples-row { display:flex; gap:6px; flex-wrap:wrap; margin-top:2px; }
@@ -183,7 +183,7 @@
         cursor:pointer; display:flex; align-items:center; gap:4px;
         transition:all var(--t); white-space:nowrap;
     }
-    .example-chip:hover { background:var(--green-l); border-color:var(--green); color:var(--green-d); }
+    .example-chip:hover { background:var(--orange-l); border-color:var(--orange); color:var(--orange-d); }
     .example-chip svg { width:12px; height:12px; }
 
     /* ── JSON VIEWER ── */
@@ -195,8 +195,8 @@
         color:var(--text); width:100%; resize:vertical; outline:none;
         transition:border-color var(--t);
     }
-    textarea.json-viewer:focus { border-color:var(--green); box-shadow:var(--green-glow); }
-    .json-key    { color:#15803d; font-weight:600; }
+    textarea.json-viewer:focus { border-color:var(--orange); box-shadow:var(--orange-glow); }
+    .json-key    { color:#ea580c; font-weight:600; }
     .json-string { color:#0369a1; }
     .json-number { color:#92400e; }
     .json-boolean{ color:#6d28d9; }
@@ -210,7 +210,7 @@
         font-size:13px; line-height:1.45;
         animation:sIn .22s ease forwards;
     }
-    .validation-item.pass { background:var(--green-l); border:1px solid #86efac; color:var(--green-d); }
+    .validation-item.pass { background:var(--orange-l); border:1px solid #fdba74; color:var(--orange-d); }
     .validation-item.fail { background:var(--red-l); border:1px solid #fca5a5; color:var(--red); }
     .validation-item.warn { background:var(--amber-l); border:1px solid #fcd34d; color:var(--amber); }
     @keyframes sIn { from{opacity:0;transform:translateX(-7px)} to{opacity:1;transform:translateX(0)} }
@@ -242,9 +242,64 @@
         font-size: 11.5px; font-family: 'JetBrains Mono', monospace; animation: fIn .2s ease;
     }
     .exec-timestamp { color: var(--text3); text-align: left; }
-    .exec-action    { color: var(--green-d); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .exec-action    { color: var(--orange-d); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .exec-detail    { color: var(--text2); white-space: normal; word-break: break-all; }
     @keyframes fIn { from{opacity:0} to{opacity:1} }
+
+    /* ── DRONE SYSTEM & TELEMETRY LOGS ── */
+    .drone-log-box {
+        display: flex;
+        flex-direction: column;
+        height: 250px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--surface2);
+        padding: 10px;
+        min-height: 0;
+    }
+    .drone-log-header {
+        font-weight: 700;
+        font-size: 12px;
+        color: var(--text2);
+        margin-bottom: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 4px;
+    }
+    .drone-log-entries {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+        overflow-y: auto;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+    }
+    .drone-log-entry {
+        display: flex;
+        gap: 6px;
+        padding: 2px 4px;
+        line-height: 1.4;
+        animation: fIn .2s ease;
+    }
+    .drone-log-entry-time {
+        color: var(--text3);
+        flex-shrink: 0;
+    }
+    .drone-log-entry-text {
+        word-break: break-all;
+        color: var(--text2);
+    }
+    .drone-log-entry.error .drone-log-entry-text {
+        color: var(--red);
+        font-weight: 600;
+    }
+    .drone-log-entry.warning .drone-log-entry-text {
+        color: var(--amber);
+        font-weight: 600;
+    }
 
     /* ── LOG & TELEMETRY TABS ── */
     .tab-btn {
@@ -254,7 +309,7 @@
         display: flex; align-items: center; transition: all var(--t);
     }
     .tab-btn:hover { color: var(--text); }
-    .tab-btn.active { color: var(--green); border-bottom-color: var(--green); }
+    .tab-btn.active { color: var(--orange); border-bottom-color: var(--orange); }
     
     /* ── COMPACT TELEMETRY ── */
     .telemetry-list-compact {
@@ -266,19 +321,19 @@
         font-family: 'JetBrains Mono', monospace; font-size: 11.5px; animation: fIn .2s ease;
     }
     .telemetry-label-compact { display: flex; align-items: center; font-weight: 600; color: var(--text2); font-family: 'Inter', sans-serif; }
-    .telemetry-value-compact { font-weight: 700; color: var(--green-d); text-align: right; padding-right: 8px; }
+    .telemetry-value-compact { font-weight: 700; color: var(--orange-d); text-align: right; padding-right: 8px; }
     .telemetry-unit-compact { color: var(--text3); font-weight: 500; text-align: left; }
 
     /* ── EXECUTE SECTION ── */
     .execute-section { display:flex; justify-content:center; gap:10px; flex-wrap:wrap; padding:4px 0; }
     .execute-btn {
-        padding:11px 32px; background:var(--green); color:#fff; border:none;
+        padding:11px 32px; background:var(--orange); color:#fff; border:none;
         border-radius:var(--radius); font-family:'Inter',sans-serif; font-size:14px; font-weight:700;
         cursor:pointer; display:flex; align-items:center; gap:8px;
-        box-shadow:0 2px 10px rgba(22,163,74,0.35);
+        box-shadow:0 2px 10px rgba(249,115,22,0.35);
         transition:all var(--t);
     }
-    .execute-btn:hover { background:var(--green-d); transform:translateY(-1px); box-shadow:0 6px 18px rgba(22,163,74,0.4); }
+    .execute-btn:hover { background:var(--orange-d); transform:translateY(-1px); box-shadow:0 6px 18px rgba(249,115,22,0.4); }
     .execute-btn:disabled { opacity:.38; cursor:not-allowed; transform:none; box-shadow:none; }
     .execute-btn svg { width:16px; height:16px; }
     .action-btn {
@@ -296,14 +351,14 @@
     }
     .reset-btn:hover { border-color:var(--red); color:var(--red); background:var(--red-l); }
     .btn-primary {
-        padding:9px 18px; background:var(--green); color:#fff; border:none;
+        padding:9px 18px; background:var(--orange); color:#fff; border:none;
         border-radius:var(--radius-s); font-family:'Inter',sans-serif;
         font-size:13px; font-weight:700; cursor:pointer;
         display:flex; align-items:center; gap:7px;
-        box-shadow:0 2px 8px rgba(22,163,74,0.3);
+        box-shadow:0 2px 8px rgba(249,115,22,0.3);
         transition:background var(--t);
     }
-    .btn-primary:hover { background:var(--green-d); }
+    .btn-primary:hover { background:var(--orange-d); }
     .btn-primary svg { width:14px; height:14px; }
     .btn-ghost {
         padding:9px 15px; background:none; color:var(--text2);
@@ -320,8 +375,8 @@
         background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius);
         transition:border-color var(--t);
     }
-    .telemetry-item:hover { border-color:var(--green); }
-    .telemetry-value { font-size:22px; font-weight:800; font-family:'JetBrains Mono',monospace; color:var(--green-d); line-height:1.2; }
+    .telemetry-item:hover { border-color:var(--orange); }
+    .telemetry-value { font-size:22px; font-weight:800; font-family:'JetBrains Mono',monospace; color:var(--orange-d); line-height:1.2; }
     .telemetry-label { font-size:9.5px; color:var(--text3); text-transform:uppercase; letter-spacing:.8px; margin-top:4px; font-weight:700; }
 
     /* ── SPINNER ── */
@@ -331,11 +386,11 @@
     /* ── EMPTY STATE ── */
     .empty-state { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:34px 20px; color:var(--text3); text-align:center; flex: 1; }
     .empty-state-icon { font-size:34px; margin-bottom:10px; opacity:.35; }
-    .empty-state svg  { color:var(--green); opacity:.3; }
+    .empty-state svg  { color:var(--orange); opacity:.3; }
     .empty-state-text { font-size:13px; }
 
     /* ── MOVEMENT ── */
-    .movement-section { grid-column:1/-1; background:var(--surface); border:1.5px solid var(--green); border-radius:var(--radius-l); padding:16px; }
+    .movement-section { grid-column:1/-1; background:var(--surface); border:1.5px solid var(--orange); border-radius:var(--radius-l); padding:16px; }
 
     /* ── MODAL ── */
     #safetyModal {
@@ -353,7 +408,7 @@
     @keyframes popIn { from{opacity:0;transform:scale(.96) translateY(8px)} to{opacity:1;transform:scale(1) translateY(0)} }
     .modal-header { display:flex; align-items:center; justify-content:space-between; padding:17px 22px; border-bottom:1px solid var(--border); background:var(--surface2); }
     .modal-title  { display:flex; align-items:center; gap:9px; font-size:15px; font-weight:700; color:var(--text); }
-    .modal-title svg { color:var(--green); width:18px; height:18px; }
+    .modal-title svg { color:var(--orange); width:18px; height:18px; }
     .modal-close  { background:none; border:none; color:var(--text3); font-size:18px; cursor:pointer; width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; transition:background var(--t); }
     .modal-close:hover { background:var(--bg2); color:var(--text); }
     .modal-body   { padding:20px 22px; display:grid; grid-template-columns:1fr 1fr; gap:14px; }
@@ -364,14 +419,14 @@
         background:var(--surface2); color:var(--text); font-family:'JetBrains Mono',monospace;
         font-size:13px; outline:none; transition:border-color var(--t), box-shadow var(--t);
     }
-    .setting-group input[type="number"]:focus { border-color:var(--green); box-shadow:var(--green-glow); background:var(--surface); }
+    .setting-group input[type="number"]:focus { border-color:var(--orange); box-shadow:var(--orange-glow); background:var(--surface); }
 
     /* ── API KEY ── */
     #apiKeyWrapper input {
         flex:1; padding:8px 12px; border:1.5px solid var(--border); border-radius:var(--radius-s);
         background:var(--surface2); color:var(--text); font-family:'Inter',sans-serif; font-size:13px; outline:none; transition:border-color var(--t);
     }
-    #apiKeyWrapper input:focus { border-color:var(--green); }
+    #apiKeyWrapper input:focus { border-color:var(--orange); }
 
     /* ── RESPONSIVE ── */
     @media(max-width:900px) {
@@ -441,27 +496,7 @@
                     <input type="radio" name="opMode" value="swarm" onchange="handleModeChange()">
                     <span>2. Multi-agent Formations</span>
                 </label>
-                <div id="swarmDronesSelector" style="display: none; margin-left: 24px; margin-top: 5px; margin-bottom: 10px; align-items: center; gap: 8px;">
-                    <span style="font-size: 0.85rem; color: var(--text-secondary);">Number of Drones:</span>
-                    <select id="swarmDronesSelect" onchange="updateSwarmDronesCount()" style="background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; outline: none; cursor: pointer;">
-                        <option value="2">2 Drones</option>
-                        <option value="3" selected>3 Drones</option>
-                        <option value="4">4 Drones</option>
-                        <option value="5">5 Drones</option>
-                    </select>
-                </div>
-                <label class="mode-option">
-                    <input type="radio" name="opMode" value="slam" onchange="handleModeChange()">
-                    <span>3. SLAM & Navigation</span>
-                </label>
-                <label class="mode-option">
-                    <input type="radio" name="opMode" value="vision" onchange="handleModeChange()">
-                    <span>4. Vision AI Target Follow</span>
-                </label>
-            </div>
-            <div class="mode-warning" id="modeWarning"
-                style="display: none; font-size: 0.85rem; color: var(--accent-amber); margin-top: 10px;">
-                ⚠️ Note: This advanced mode is currently running in mock/headless configuration to save RAM.
+
             </div>
         </div>
 
@@ -477,13 +512,21 @@
                     <input type="radio" name="aiEngine" value="online" onchange="handleEngineChange()">
                     <span>Online (Gemini 3.5 Flash API)</span>
                 </label>
+                <label class="mode-option">
+                    <input type="radio" name="aiEngine" value="online_lite" onchange="handleEngineChange()">
+                    <span>Online (Gemini 3.1 Flash Lite)</span>
+                </label>
+                <label class="mode-option">
+                    <input type="radio" name="aiEngine" value="online_pro" onchange="handleEngineChange()">
+                    <span>Online (Gemini 2.5 Pro)</span>
+                </label>
             </div>
             <div id="apiKeyWrapper" style="display: none; margin-top: 10px;">
                 <div style="display: flex; gap: 8px; align-items: center; width: 100%;">
                     <input type="password" id="apiKeyInput" placeholder="Enter GEMINI_API_KEY here..."
                         style="flex: 1; padding: 8px 12px; border-radius: 6px; border: 1.5px solid var(--border); background-color: var(--surface2); color: var(--text); font-family: 'Inter', sans-serif;">
                     <button id="apiSaveBtn" onclick="toggleApiKeyEdit()"
-                        style="background-color: var(--green); color: white; border: none; border-radius: 6px; padding: 8px 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; white-space: nowrap; height: 38px;">
+                        style="background-color: var(--orange); color: white; border: none; border-radius: 6px; padding: 8px 16px; font-weight: 600; cursor: pointer; transition: background 0.2s; white-space: nowrap; height: 38px;">
                         Save
                     </button>
                 </div>
@@ -642,7 +685,7 @@
             </div>
             <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
                 <button class="action-btn" onclick="handleArm()"
-                    style="background-color: var(--green); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🟢
+                    style="background-color: var(--orange); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🟢
                     Arm</button>
                 <button class="action-btn" onclick="handleDisarm()"
                     style="background-color: var(--red); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🔴
@@ -654,10 +697,10 @@
                     style="background-color: var(--accent-blue); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🔽
                     Down</button>
                 <button class="action-btn" onclick="handleMove('front')"
-                    style="background-color: var(--accent-green); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬆️
+                    style="background-color: var(--accent-orange); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬆️
                     Front</button>
                 <button class="action-btn" onclick="handleMove('back')"
-                    style="background-color: var(--accent-green); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬇️
+                    style="background-color: var(--accent-orange); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬇️
                     Back</button>
                 <button class="action-btn" onclick="handleMove('left')"
                     style="background-color: var(--accent-purple); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">⬅️
@@ -678,6 +721,19 @@
                 <span class="card-badge badge-stage1" id="telemetryBadge">Disconnected</span>
             </div>
             <div id="telemetryDronesContainer">
+                <!-- Dynamically populated by JS based on drone selection -->
+            </div>
+        </div>
+
+        <!-- Drone System & Telemetry Logs Card -->
+        <div class="card" id="droneLogsCard" style="grid-column: 1/-1; margin-top: 15px; display: flex; flex-direction: column;">
+            <div class="card-header" style="margin-bottom: 12px;">
+                <div class="card-title">
+                    <i data-lucide="terminal" class="icon"></i>
+                    Drone Console & Telemetry Logs
+                </div>
+            </div>
+            <div id="droneLogsContainer" style="display: grid; gap: 15px; grid-template-columns: 1fr; width: 100%;">
                 <!-- Dynamically populated by JS based on drone selection -->
             </div>
         </div>
@@ -760,48 +816,19 @@
                 { text: "Fly 3 drones in column formation north 30m and east 30m, then land.", label: "➡️ Column Patrol" },
                 { text: "Wedge formation takeoff to 10m, loiter 10 seconds, then return to launch.", label: "<i data-lucide='clock' style='width: 14px; height: 14px;'></i> Swarm Hover" },
                 { text: "Three drones in wedge: fly north 35m, east 15m, return home.", label: "🏠 Wedge Home" }
-            ],
-            slam: [
-                { text: "Explore the unknown building autonomously.", label: "🗺️ Build Explore" },
-                { text: "Plan autonomous SLAM mapping of the room within 30 meters bounds.", label: "🛢️ Room Map" },
-                { text: "Map the area from north -40m to 40m and east -40m to 40m for 100 seconds.", label: "🧭 Custom Bounds" },
-                { text: "Explore the courtyard, setting boundaries of 50m around home.", label: "⛲ Courtyard SLAM" },
-                { text: "Map the surrounding terrain up to 35m boundary for 60s.", label: "⛰️ Terrain Map" }
-            ],
-            vision: [
-                { text: "Find the red car and follow it.", label: "🚗 Red Car Follow" },
-                { text: "Track the person moving at north 20m and east 20m.", label: "🚶 Track Person" },
-                { text: "Find the red_box target class and follow it for 60 seconds.", label: "📦 Red Box Track" },
-                { text: "Search for the blue truck and track it.", label: "🚚 Blue Truck" },
-                { text: "Fly to north 10m, search for the target person and follow them.", label: "🔍 Search & Follow" }
             ]
         };
 
         function handleModeChange() {
             const mode = document.querySelector('input[name="opMode"]:checked').value;
-            const warning = document.getElementById('modeWarning');
             const input = document.getElementById('promptInput');
 
-            const swarmSelector = document.getElementById('swarmDronesSelector');
             let numDrones = 1;
             if (mode === 'standard') {
-                warning.style.display = 'none';
-                if (swarmSelector) swarmSelector.style.display = 'none';
                 input.placeholder = 'e.g. "Patrol the perimeter loop twice at 15 metres"';
             } else if (mode === 'swarm') {
-                warning.style.display = 'block';
-                if (swarmSelector) swarmSelector.style.display = 'flex';
                 input.placeholder = 'e.g. "Three drones sweep this area in a wedge formation"';
-                const select = document.getElementById('swarmDronesSelect');
-                numDrones = select ? parseInt(select.value) : 3;
-            } else if (mode === 'slam') {
-                warning.style.display = 'block';
-                if (swarmSelector) swarmSelector.style.display = 'none';
-                input.placeholder = 'e.g. "Explore the unknown building autonomously"';
-            } else if (mode === 'vision') {
-                warning.style.display = 'block';
-                if (swarmSelector) swarmSelector.style.display = 'none';
-                input.placeholder = 'e.g. "Find the red car and follow it"';
+                numDrones = 3;
             }
 
             // Dynamically update example chips
@@ -813,6 +840,7 @@
                 }).join('');
             }
             renderTelemetryLayout(numDrones);
+            renderDroneLogsLayout(numDrones);
         }
 
         function renderTelemetryLayout(numDrones) {
@@ -835,27 +863,27 @@
                         <div class="telemetry-grid">
                             <div class="telemetry-item">
                                 <div class="telemetry-value" id="telAlt_${i}">--</div>
-                                <div class="telemetry-label"><i data-lucide="arrow-up-right" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Altitude (m)</div>
+                                <div class="telemetry-label"><i data-lucide="arrow-up-right" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--orange);"></i>Altitude (m)</div>
                             </div>
                             <div class="telemetry-item">
                                 <div class="telemetry-value" id="telSpeed_${i}">--</div>
-                                <div class="telemetry-label"><i data-lucide="gauge" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Speed (m/s)</div>
+                                <div class="telemetry-label"><i data-lucide="gauge" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--orange);"></i>Speed (m/s)</div>
                             </div>
                             <div class="telemetry-item">
                                 <div class="telemetry-value" id="telHeading_${i}">--</div>
-                                <div class="telemetry-label"><i data-lucide="compass" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Heading (°)</div>
+                                <div class="telemetry-label"><i data-lucide="compass" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--orange);"></i>Heading (°)</div>
                             </div>
                             <div class="telemetry-item">
                                 <div class="telemetry-value" id="telBat_${i}">--</div>
-                                <div class="telemetry-label"><i data-lucide="battery" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Battery (%)</div>
+                                <div class="telemetry-label"><i data-lucide="battery" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--orange);"></i>Battery (%)</div>
                             </div>
                             <div class="telemetry-item">
                                 <div class="telemetry-value" id="telLat_${i}">--</div>
-                                <div class="telemetry-label"><i data-lucide="map-pin" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Latitude</div>
+                                <div class="telemetry-label"><i data-lucide="map-pin" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--orange);"></i>Latitude</div>
                             </div>
                             <div class="telemetry-item">
                                 <div class="telemetry-value" id="telLon_${i}">--</div>
-                                <div class="telemetry-label"><i data-lucide="map-pin" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--green);"></i>Longitude</div>
+                                <div class="telemetry-label"><i data-lucide="map-pin" style="width: 11px; height: 11px; vertical-align: middle; margin-right: 4px; color: var(--orange);"></i>Longitude</div>
                             </div>
                         </div>
                     </div>
@@ -867,13 +895,44 @@
             }
         }
 
-        function updateSwarmDronesCount() {
-            const select = document.getElementById('swarmDronesSelect');
-            if (select) {
-                const val = parseInt(select.value);
-                renderTelemetryLayout(val);
+        function renderDroneLogsLayout(numDrones) {
+            const container = document.getElementById('droneLogsContainer');
+            if (!container) return;
+            
+            const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+            const isSwarm = (currentMode === 'swarm');
+            const limit = isSwarm ? numDrones : 1;
+            
+            // Set grid template columns based on drone count
+            container.style.gridTemplateColumns = limit > 1 ? `repeat(${limit}, 1fr)` : '1fr';
+            
+            let html = '';
+            for (let i = 0; i < limit; i++) {
+                const title = isSwarm ? (i === 0 ? "Drone 1 (Leader)" : `Drone ${i + 1} (Wingman)`) : "Drone";
+                html += `
+                    <div class="drone-log-box">
+                        <div class="drone-log-header">
+                            <span style="display: flex; align-items: center; gap: 4px;">
+                                <i data-lucide="terminal" style="width: 12px; height: 12px; color: var(--accent-blue);"></i>
+                                ${title} Console Logs
+                            </span>
+                            <span id="droneLogStatus_${i}" style="font-size: 10px; font-weight: bold; color: var(--text3);">Awaiting logs...</span>
+                        </div>
+                        <div class="drone-log-entries" id="droneLogEntries_${i}">
+                            <div class="empty-state" style="padding: 10px 0; text-align: center;">
+                                <div class="empty-state-text" style="font-size: 11px; color: var(--text3);">Awaiting telemetry or system logs...</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+            if (window.lucide) {
+                lucide.createIcons();
             }
         }
+
+
 
         function initApiKey() {
             const savedKey = localStorage.getItem('gemini_api_key');
@@ -889,7 +948,7 @@
             } else {
                 input.disabled = false;
                 btn.textContent = 'Save';
-                btn.style.backgroundColor = 'var(--green)';
+                btn.style.backgroundColor = 'var(--orange)';
                 btn.style.color = 'white';
             }
         }
@@ -902,7 +961,7 @@
                 input.disabled = false;
                 input.focus();
                 btn.textContent = 'Save';
-                btn.style.backgroundColor = 'var(--green)';
+                btn.style.backgroundColor = 'var(--orange)';
                 btn.style.color = 'white';
             } else {
                 const key = input.value.trim();
@@ -916,7 +975,7 @@
                     localStorage.removeItem('gemini_api_key');
                     input.disabled = false;
                     btn.textContent = 'Save';
-                    btn.style.backgroundColor = 'var(--green)';
+                    btn.style.backgroundColor = 'var(--orange)';
                     btn.style.color = 'white';
                 }
             }
@@ -948,7 +1007,7 @@
         function handleEngineChange() {
             const engine = document.querySelector('input[name="aiEngine"]:checked').value;
             const keyWrapper = document.getElementById('apiKeyWrapper');
-            if (engine === 'online') {
+            if (engine.startsWith('online')) {
                 keyWrapper.style.display = 'block';
                 initApiKey();
             } else {
@@ -971,10 +1030,41 @@
             const currentMode = document.querySelector('input[name="opMode"]:checked').value;
             const currentEngine = document.querySelector('input[name="aiEngine"]:checked').value;
             const apiKey = document.getElementById('apiKeyInput').value.trim() || localStorage.getItem('gemini_api_key') || '';
-            const swarmSelect = document.getElementById('swarmDronesSelect');
-            const numDrones = swarmSelect ? parseInt(swarmSelect.value) : 3;
+            const numDrones = 3;
+
+            if (currentEngine === 'offline') {
+                try {
+                    setStatus('executing', 'Checking local Ollama status...');
+                    const oRes = await fetch(`${API}/api/check-ollama`);
+                    const oData = await oRes.json();
+                    if (!oData.installed) {
+                        const installConfirm = confirm(`Ollama is not installed locally.\n\nTo run local AI models offline, Ollama (${oData.required_gb} GB) must be installed. You currently have ${oData.free_disk_gb} GB of free disk space available.\n\nWould you like to install Ollama automatically right now?`);
+                        if (installConfirm) {
+                            setStatus('executing', 'Installing Ollama (this may take a couple minutes)...');
+                            const iRes = await fetch(`${API}/api/install-ollama`, { method: 'POST' });
+                            const iData = await iRes.json();
+                            if (!iData.success) {
+                                alert('Ollama installation failed: ' + iData.error);
+                                setStatus('error', 'Ollama install failed');
+                                btn.disabled = false;
+                                btn.innerHTML = '<i data-lucide="brain-circuit"></i> Plan Mission';
+                                return;
+                            }
+                            alert('Ollama installed successfully! Continuing with mission planning...');
+                        } else {
+                            setStatus('error', 'Ollama required for offline mode');
+                            btn.disabled = false;
+                            btn.innerHTML = '<i data-lucide="brain-circuit"></i> Plan Mission';
+                            return;
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Ollama status check warning:', err);
+                }
+            }
 
             try {
+                setStatus('executing', currentMode === 'swarm' ? 'Running 4-Stage Swarm AI Chain...' : 'Planning Mission...');
                 const res = await fetch(`${API}/api/plan-validate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1099,8 +1189,8 @@
                     isHolding = !isHolding;
                     if (isHolding) {
                         btn.innerHTML = '▶️ Resume';
-                        btn.style.backgroundColor = 'var(--accent-green)';
-                        btn.style.borderColor = 'var(--accent-green)';
+                        btn.style.backgroundColor = 'var(--accent-orange)';
+                        btn.style.borderColor = 'var(--accent-orange)';
                         setStatus('executing', 'Holding...');
                     } else {
                         btn.innerHTML = '<i data-lucide="pause-circle"></i> Hold';
@@ -1181,15 +1271,69 @@
         function displayMissionJSON(mission) {
             const container = document.getElementById('jsonContent');
             const jsonString = JSON.stringify(mission, null, 2);
-            container.innerHTML = `
-                <textarea id="missionJsonEditor" spellcheck="false" style="width: 100%; height: 350px; font-family: monospace; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 12px; font-size: 14px;">${escapeHtml(jsonString)}</textarea>
-                <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
-                    <button onclick="revalidateMission()" style="background-color: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s;">🔄 Update & Re-validate</button>
-                </div>
-            `;
+            
+            if (mission.llm_stages) {
+                const st = mission.llm_stages;
+                const c = st.cleanup || {};
+                const ts = st.task_split || {};
+                const fc = st.follower_config || {};
+                
+                container.innerHTML = `
+                    <div style="display:flex; gap:8px; margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px; overflow-x:auto;">
+                        <button onclick="switchSwarmTab('tab_json')" id="btn_tab_json" class="swarm-tab-btn active" style="padding:4px 10px; border-radius:4px; border:none; background:var(--accent-blue); color:#fff; cursor:pointer; font-size:12px; font-weight:bold;">Final JSON</button>
+                        <button onclick="switchSwarmTab('tab_s1')" id="btn_tab_s1" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 1: Intent</button>
+                        <button onclick="switchSwarmTab('tab_s2')" id="btn_tab_s2" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 2: Split</button>
+                        <button onclick="switchSwarmTab('tab_s3')" id="btn_tab_s3" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 3: Leader</button>
+                        <button onclick="switchSwarmTab('tab_s4')" id="btn_tab_s4" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 4: Wingmen</button>
+                    </div>
+                    <div id="tab_json" class="swarm-tab-pane" style="display:block;">
+                        <textarea id="missionJsonEditor" spellcheck="false" style="width: 100%; height: 310px; font-family: monospace; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 12px; font-size: 13px;">${escapeHtml(jsonString)}</textarea>
+                    </div>
+                    <div id="tab_s1" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
+                        <div style="margin-bottom:10px;"><strong style="color:var(--accent-blue);">Operational Mode:</strong> <span style="background:var(--accent-blue); color:#fff; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:bold;">${escapeHtml(c.mode || 'FORMATION')}</span></div>
+                        <div><strong style="color:var(--text);">Cleaned Prompt:</strong><p style="background:var(--surface2); padding:8px; border-radius:4px; margin-top:4px;">${escapeHtml(c.cleaned_prompt || '')}</p></div>
+                    </div>
+                    <div id="tab_s2" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
+                        <div style="margin-bottom:8px;"><strong style="color:var(--orange);">Formation Shape:</strong> ${escapeHtml(ts.formation || 'wedge').toUpperCase()} | <strong style="color:var(--orange);">Spacing:</strong> ${ts.spacing_m || 5}m</div>
+                        <div style="margin-bottom:8px;"><strong style="color:var(--text);">Leader Task:</strong><p style="background:var(--surface2); padding:6px; border-radius:4px; margin-top:2px;">${escapeHtml(ts.leader_task || '')}</p></div>
+                        <div><strong style="color:var(--text);">Wingmen Role:</strong><p style="background:var(--surface2); padding:6px; border-radius:4px; margin-top:2px;">${escapeHtml(ts.follower_task || '')}</p></div>
+                    </div>
+                    <div id="tab_s3" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
+                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${escapeHtml(JSON.stringify(st.leader_json || {}, null, 2))}</pre>
+                    </div>
+                    <div id="tab_s4" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
+                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${escapeHtml(JSON.stringify(fc, null, 2))}</pre>
+                    </div>
+                    <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+                        <button onclick="revalidateMission()" style="background-color: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s;">🔄 Update & Re-validate</button>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <textarea id="missionJsonEditor" spellcheck="false" style="width: 100%; height: 350px; font-family: monospace; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 12px; font-size: 14px;">${escapeHtml(jsonString)}</textarea>
+                    <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
+                        <button onclick="revalidateMission()" style="background-color: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s;">🔄 Update & Re-validate</button>
+                    </div>
+                `;
+            }
             document.getElementById('jsonBadge').textContent = 'Editable';
             document.getElementById('jsonBadge').className = 'card-badge badge-success';
         }
+
+        window.switchSwarmTab = function(tabId) {
+            document.querySelectorAll('.swarm-tab-pane').forEach(p => p.style.display = 'none');
+            document.querySelectorAll('.swarm-tab-btn').forEach(b => {
+                b.style.background = 'var(--surface2)';
+                b.style.color = 'var(--text2)';
+            });
+            const pane = document.getElementById(tabId);
+            if (pane) pane.style.display = 'block';
+            const btn = document.getElementById('btn_' + tabId);
+            if (btn) {
+                btn.style.background = 'var(--accent-blue)';
+                btn.style.color = '#fff';
+            }
+        };
 
         async function revalidateMission() {
             const editor = document.getElementById('missionJsonEditor');
@@ -1445,9 +1589,9 @@
             if (mission.vehicle_type === 'swarm' && waypoints.length > 0) {
                 offsets.forEach(([dx, dy], droneIdx) => {
                     const colors = [
-                        { path: 'rgba(6, 182, 212, 0.5)', dot: '#06b6d4', label: 'D1' }, // Leader
-                        { path: 'rgba(139, 92, 246, 0.5)', dot: '#8b5cf6', label: 'D2' }, // Wingman 1
-                        { path: 'rgba(236, 72, 153, 0.5)', dot: '#ec4899', label: 'D3' }  // Wingman 2
+                        { path: 'rgba(249, 115, 22, 0.7)', dot: '#f97316', label: 'Leader' }, // Alpha (Leader)
+                        { path: 'rgba(59, 130, 246, 0.6)', dot: '#3b82f6', label: 'Bravo' },  // Follower 1
+                        { path: 'rgba(16, 185, 129, 0.6)', dot: '#10b981', label: 'Charlie' } // Follower 2
                     ];
                     const col = colors[droneIdx] || colors[0];
 
@@ -1731,6 +1875,46 @@
                         }
                     }
 
+                    if (data.drone_logs && data.drone_logs.length > 0) {
+                        const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+                        const isSwarm = (currentMode === 'swarm');
+                        const limit = isSwarm ? 3 : 1;
+
+                        for (let i = 0; i < limit; i++) {
+                            const entriesEl = document.getElementById(`droneLogEntries_${i}`);
+                            const statusEl = document.getElementById(`droneLogStatus_${i}`);
+                            const logs = data.drone_logs[i] || [];
+                            
+                            if (entriesEl) {
+                                if (logs.length > 0) {
+                                    if (statusEl) statusEl.textContent = `${logs.length} entries`;
+                                    
+                                    let logsHtml = '';
+                                    logs.forEach(log => {
+                                        const timeStr = log.timestamp ? log.timestamp.split('T')[1].slice(0, 8) : '--:--:--';
+                                        const entryClass = log.status === 'error' ? 'error' : (log.status === 'warning' ? 'warning' : '');
+                                        
+                                        logsHtml += `
+                                            <div class="drone-log-entry ${entryClass}">
+                                                <span class="drone-log-entry-time">[${timeStr}]</span>
+                                                <span class="drone-log-entry-text">${escapeHtml(log.message)}</span>
+                                            </div>
+                                        `;
+                                    });
+                                    entriesEl.innerHTML = logsHtml;
+                                    entriesEl.scrollTop = entriesEl.scrollHeight;
+                                } else {
+                                    if (statusEl) statusEl.textContent = 'Awaiting logs...';
+                                    entriesEl.innerHTML = `
+                                        <div class="empty-state" style="padding: 10px 0; text-align: center;">
+                                            <div class="empty-state-text" style="font-size: 11px; color: var(--text3);">Awaiting telemetry or system logs...</div>
+                                        </div>
+                                    `;
+                                }
+                            }
+                        }
+                    }
+
                     const badge = document.getElementById('telemetryBadge');
                     const isConnected = !!tel.connected;
                     badge.textContent = isConnected ? 'Connected' : 'Disconnected';
@@ -1769,8 +1953,8 @@
                             const holdBtn = document.getElementById('holdBtn');
                             if (holdBtn) {
                                 holdBtn.innerHTML = '▶️ Resume';
-                                holdBtn.style.backgroundColor = 'var(--accent-green)';
-                                holdBtn.style.borderColor = 'var(--accent-green)';
+                                holdBtn.style.backgroundColor = 'var(--accent-orange)';
+                                holdBtn.style.borderColor = 'var(--accent-orange)';
                             }
                             isHolding = true;
                         } else if (status === 'completed' && lastStatus === 'executing') {
