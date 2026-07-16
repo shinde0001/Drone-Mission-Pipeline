@@ -167,26 +167,29 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                     baud_rate = pipeline_state.get("baud_rate", 57600)
                     
                     # Smart baud negotiation
-                    attempts = [(baud_rate, 3), (baud_rate, 3), (baud_rate, 3), (115200, 1), (9600, 1)]
-                    for b_rate, max_tries in attempts:
-                        try:
-                            await drone.connect(system_address=f"serial://{port_path}:{b_rate}")
-                            # wait up to 3s for connection
-                            for _ in range(6):
-                                async for state in drone.core.connection_state():
-                                    if state.is_connected:
-                                        connected = True
-                                        break
-                                    break # Only check one item from async generator then sleep
-                                if connected: break
-                                await asyncio.sleep(0.5)
-                        except Exception:
-                            pass
+                    baud_sequence = [(baud_rate, 3), (115200, 1), (9600, 1)]
+                    for b_rate, max_tries in baud_sequence:
+                        if connected: break
                         
-                        if connected:
-                            print(f"Hardware drone {drone_idx} connected on {port_path} at {b_rate} baud")
-                            pipeline_state["baud_rate"] = b_rate # Save successful baud rate
-                            break
+                        for attempt in range(max_tries):
+                            try:
+                                await drone.connect(system_address=f"serial://{port_path}:{b_rate}")
+                                # wait up to 3s for connection
+                                for _ in range(6):
+                                    async for state in drone.core.connection_state():
+                                        if state.is_connected:
+                                            connected = True
+                                            break
+                                        break # Only check one item from async generator then sleep
+                                    if connected: break
+                                    await asyncio.sleep(0.5)
+                            except Exception:
+                                pass
+                            
+                            if connected:
+                                print(f"Hardware drone {drone_idx} connected on {port_path} at {b_rate} baud (attempt {attempt + 1})")
+                                pipeline_state["baud_rate"] = b_rate # Save successful baud rate
+                                break
                             
                 if not connected:
                     # Connection failed or no port assigned

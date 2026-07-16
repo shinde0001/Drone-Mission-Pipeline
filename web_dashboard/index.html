@@ -2730,6 +2730,26 @@
         lucide.createIcons();
 
     </script>
+    
+    <!-- Hardware Execution Confirmation Modal -->
+    <div id="hardwareConfirmModal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(5,20,5,0.7); backdrop-filter:blur(5px); justify-content:center; align-items:center;">
+        <div style="background:var(--surface); border:1.5px solid var(--orange); border-radius:16px; width:100%; max-width:450px; box-shadow:0 10px 30px rgba(234,88,12,0.2); animation:popIn .2s ease;">
+            <div style="padding:17px 22px; border-bottom:1px solid var(--border); background:var(--surface2); display:flex; align-items:center; gap:10px;">
+                <span style="font-size:20px;">⚠️</span>
+                <span style="font-size:15px; font-weight:700; color:var(--text); letter-spacing:1px;">HARDWARE EXECUTION</span>
+            </div>
+            <div style="padding:22px; display:flex; flex-direction:column; gap:14px; font-size:14px; line-height:1.5;">
+                <p style="color:var(--text2); margin:0;">You are about to execute this mission on <b>REAL HARDWARE</b>. This will physically move aircraft.</p>
+                <div id="hardwareSafetyChecklist" style="background:var(--surface2); border:1px solid var(--border); border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:8px; font-family:'Inter', sans-serif;">
+                    <!-- Filled by JS -->
+                </div>
+            </div>
+            <div style="padding:14px 22px; border-top:1px solid var(--border); background:var(--surface2); display:flex; justify-content:flex-end; gap:10px;">
+                <button onclick="closeHardwareConfirm()" style="padding:8px 16px; border:1px solid var(--border); border-radius:6px; background:var(--surface); color:var(--text); cursor:pointer; font-weight:600;">Cancel</button>
+                <button onclick="confirmHardwareExecute()" style="padding:8px 16px; border:none; border-radius:6px; background:var(--orange); color:white; cursor:pointer; font-weight:600;">CONFIRM & EXECUTE</button>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>

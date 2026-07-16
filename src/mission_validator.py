@@ -447,6 +447,8 @@ def validate_hardware_safety(mission: dict, telemetry: dict) -> ValidationResult
         actions = mission["leader_mission"].get("actions", [])
 
     rtl_present = False
+    # 4. Geofence & Waypoint Checks
+    hw_geofence_m = limits.get("geofence_radius_m", 200.0)
     for i, action in enumerate(actions):
         if not isinstance(action, dict): continue
         if action.get("type") in ("return_to_launch", "rtl"):
@@ -460,8 +462,22 @@ def validate_hardware_safety(mission: dict, telemetry: dict) -> ValidationResult
         speed = params.get("speed_mps")
         if speed is not None and speed > 8.0:
              result.add_warning(f"Hardware Safety Advisory: Action {i} requests speed {speed}m/s. Ensure wind conditions permit this velocity safely.")
-             
+
+        # Geofence check
+        n = params.get("north_m", 0.0)
+        e = params.get("east_m", 0.0)
+        if action.get("type") == "sweep":
+            n = max(abs(params.get("corner_a_north_m", 0.0)), abs(params.get("corner_b_north_m", 0.0)))
+            e = max(abs(params.get("corner_a_east_m", 0.0)), abs(params.get("corner_b_east_m", 0.0)))
+            
+        dist = math.sqrt(n**2 + e**2)
+        if dist > hw_geofence_m:
+             result.add_error(f"Hardware Safety Violation: Action {i} exceeds geofence radius of {hw_geofence_m}m (distance: {dist:.1f}m).")
+
     if not rtl_present:
         result.add_warning("Hardware Safety Advisory: Mission does not explicitly end with a return-to-launch (RTL) command.")
+
+    # 5. Failsafe Warning
+    result.add_warning("Hardware Safety Advisory: Ensure RC-loss and low-battery failsafe are enabled and armed on the physical flight controller.")
 
     return result
