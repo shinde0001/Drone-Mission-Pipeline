@@ -32,6 +32,10 @@
         --red-l:        #fee2e2;
         --blue:         #1d4ed8;
         --blue-l:       #dbeafe;
+        --accent-blue:   #2563eb;
+        --accent-orange: #f97316;
+        --accent-amber:  #d97706;
+        --accent-purple: #7c3aed;
         --radius-s:     6px;
         --radius:       10px;
         --radius-l:     14px;
@@ -518,20 +522,20 @@
             <div class="mode-title">🤖 AI Engine</div>
             <div class="mode-options">
                 <label class="mode-option">
-                    <input type="radio" name="aiEngine" value="offline" checked onchange="handleEngineChange()">
-                    <span>Offline (Local Ollama)</span>
+                    <input type="radio" name="aiEngine" value="online_lite" checked onchange="handleEngineChange()">
+                    <span>Online (Gemini 3.1 Flash Lite)</span>
                 </label>
                 <label class="mode-option">
                     <input type="radio" name="aiEngine" value="online" onchange="handleEngineChange()">
                     <span>Online (Gemini 3.5 Flash API)</span>
                 </label>
                 <label class="mode-option">
-                    <input type="radio" name="aiEngine" value="online_lite" onchange="handleEngineChange()">
-                    <span>Online (Gemini 3.1 Flash Lite)</span>
-                </label>
-                <label class="mode-option">
                     <input type="radio" name="aiEngine" value="online_pro" onchange="handleEngineChange()">
                     <span>Online (Gemini 2.5 Pro)</span>
+                </label>
+                <label class="mode-option">
+                    <input type="radio" name="aiEngine" value="offline" onchange="handleEngineChange()">
+                    <span>Offline (Local Ollama)</span>
                 </label>
             </div>
             <div id="apiKeyWrapper" style="display: none; margin-top: 10px;">
@@ -556,7 +560,8 @@
             </div>
             <div class="prompt-input-wrapper" style="display: flex; gap: 8px; width: 100%;">
                 <input type="text" id="promptInput" class="prompt-input" style="flex: 1;"
-                    placeholder="e.g. &quot;Patrol the perimeter loop twice at 15 metres&quot;" autocomplete="off">
+                    placeholder="e.g. &quot;Patrol the perimeter loop twice at 15 metres&quot;" autocomplete="off"
+                    onkeydown="if(event.key === 'Enter') handleSubmit()">
                 <button id="micBtn" onclick="toggleSpeech()" title="Voice Input"
                     style="background: none; border: 1px solid var(--border, #334155); border-radius: 8px; cursor: pointer; padding: 0 16px; font-size: 1.2rem; transition: background 0.2s; min-width: 50px;">
                     <i data-lucide="mic"></i>
@@ -688,6 +693,8 @@
                 style="background:#dc2626; color:white;">
                 <i data-lucide="power"></i> Terminate
             </button>
+            <div id="liveCoordsContainer" style="width: 100%; display: flex; justify-content: center; gap: 15px; margin-top: 5px; font-size: 0.85rem; font-family: 'Inter', monospace; color: var(--text2);">
+            </div>
         </div>
 
         <!-- Movement Control Section (Hidden by default) -->
@@ -696,6 +703,22 @@
             <div class="card-title" style="margin-bottom: 5px; font-size: 1rem;">
                 <span class="icon">🕹️</span> Manual Override Controls
             </div>
+            
+            <div id="manualFormationControls" style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 10px;">
+                <button class="action-btn" onclick="setManualFormation('wedge')"
+                    style="background-color: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 0.9rem;">
+                    <i data-lucide="triangle"></i> Wedge
+                </button>
+                <button class="action-btn" onclick="setManualFormation('line')"
+                    style="background-color: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 0.9rem;">
+                    <i data-lucide="minus"></i> Line
+                </button>
+                <button class="action-btn" onclick="setManualFormation('column')"
+                    style="background-color: var(--card-bg); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 0.9rem;">
+                    <i data-lucide="more-vertical"></i> Column
+                </button>
+            </div>
+
             <div style="display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
                 <button class="action-btn" onclick="handleArm()"
                     style="background-color: var(--orange); color: white; border: none; border-radius: 6px; padding: 8px 16px; cursor: pointer;">🟢
@@ -996,7 +1019,13 @@
 
         function updateMovementSection(isConnected, status) {
             const movementSection = document.getElementById('movementSection');
+            const manualFormationControls = document.getElementById('manualFormationControls');
             if (!movementSection) return;
+
+            const isSwarm = document.querySelector('input[name="opMode"]:checked').value === 'swarm';
+            if (manualFormationControls) {
+                manualFormationControls.style.display = isSwarm ? 'flex' : 'none';
+            }
 
             if (isConnected && status !== 'executing') {
                 movementSection.style.display = 'flex';
@@ -1077,7 +1106,7 @@
             }
 
             try {
-                setStatus('executing', currentMode === 'swarm' ? 'Running 4-Stage Swarm AI Chain...' : 'Planning Mission...');
+                setStatus('executing', currentMode === 'swarm' ? 'Running 5-Stage Swarm AI Pipeline...' : 'Planning Mission...');
                 const res = await fetch(`${API}/api/plan-validate`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1265,6 +1294,24 @@
             }
         }
 
+        async function setManualFormation(formation) {
+            try {
+                const res = await fetch(`${API}/api/action/formation`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ formation })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    lucide.createIcons();
+                } else {
+                    console.error("Formation set failed:", data.error);
+                }
+            } catch (err) {
+                console.error("Formation request failed:", err);
+            }
+        }
+
         // ── Live RTL Action ──
         async function handleRTL() {
             setStatus('executing', 'Returning to Launch...');
@@ -1287,35 +1334,38 @@
             
             if (mission.llm_stages) {
                 const st = mission.llm_stages;
-                const c = st.cleanup || {};
-                const ts = st.task_split || {};
-                const fc = st.follower_config || {};
+                const classify = st.classify || {};
+                const repairs = st.repairs || [];
+                const repairsCount = repairs.length;
                 
                 container.innerHTML = `
                     <div style="display:flex; gap:8px; margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px; overflow-x:auto;">
                         <button onclick="switchSwarmTab('tab_json')" id="btn_tab_json" class="swarm-tab-btn active" style="padding:4px 10px; border-radius:4px; border:none; background:var(--accent-blue); color:#fff; cursor:pointer; font-size:12px; font-weight:bold;">Final JSON</button>
-                        <button onclick="switchSwarmTab('tab_s1')" id="btn_tab_s1" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 1: Intent</button>
-                        <button onclick="switchSwarmTab('tab_s2')" id="btn_tab_s2" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 2: Split</button>
-                        <button onclick="switchSwarmTab('tab_s3')" id="btn_tab_s3" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 3: Leader</button>
-                        <button onclick="switchSwarmTab('tab_s4')" id="btn_tab_s4" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 4: Wingmen</button>
+                        <button onclick="switchSwarmTab('tab_s1')" id="btn_tab_s1" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 1: Classify</button>
+                        <button onclick="switchSwarmTab('tab_s2')" id="btn_tab_s2" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 2: Leader</button>
+                        <button onclick="switchSwarmTab('tab_s3')" id="btn_tab_s3" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 3: Formation</button>
+                        <button onclick="switchSwarmTab('tab_s4')" id="btn_tab_s4" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 4: Followers</button>
+                        <button onclick="switchSwarmTab('tab_s5')" id="btn_tab_s5" class="swarm-tab-btn" style="padding:4px 10px; border-radius:4px; border:none; background:var(--surface2); color:var(--text2); cursor:pointer; font-size:12px;">Stage 5: Repairs (${repairsCount})</button>
                     </div>
                     <div id="tab_json" class="swarm-tab-pane" style="display:block;">
                         <textarea id="missionJsonEditor" spellcheck="false" style="width: 100%; height: 310px; font-family: monospace; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 12px; font-size: 13px;">${escapeHtml(jsonString)}</textarea>
                     </div>
                     <div id="tab_s1" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
-                        <div style="margin-bottom:10px;"><strong style="color:var(--accent-blue);">Operational Mode:</strong> <span style="background:var(--accent-blue); color:#fff; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:bold;">${escapeHtml(c.mode || 'FORMATION')}</span></div>
-                        <div><strong style="color:var(--text);">Cleaned Prompt:</strong><p style="background:var(--surface2); padding:8px; border-radius:4px; margin-top:4px;">${escapeHtml(c.cleaned_prompt || '')}</p></div>
+                        <div style="margin-bottom:10px;"><strong style="color:var(--accent-blue);">Operational Mode:</strong> <span style="background:var(--accent-blue); color:#fff; padding:2px 6px; border-radius:4px; font-size:11px; font-weight:bold;">${escapeHtml(classify.mode || 'FORMATION')}</span></div>
+                        <div style="margin-bottom:8px;"><strong style="color:var(--orange);">Formation Shape:</strong> ${escapeHtml((classify.formation_type || 'wedge').toUpperCase())} | <strong style="color:var(--orange);">Agents:</strong> ${escapeHtml(classify.num_agents || 3)}</div>
+                        <div><strong style="color:var(--text);">Needs Task Split:</strong> <span style="font-weight:bold; color:${classify.needs_task_split ? 'var(--accent-orange)' : 'var(--text2)'};">${classify.needs_task_split ? 'YES' : 'NO'}</span></div>
                     </div>
                     <div id="tab_s2" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
-                        <div style="margin-bottom:8px;"><strong style="color:var(--orange);">Formation Shape:</strong> ${escapeHtml(ts.formation || 'wedge').toUpperCase()} | <strong style="color:var(--orange);">Spacing:</strong> ${ts.spacing_m || 5}m</div>
-                        <div style="margin-bottom:8px;"><strong style="color:var(--text);">Leader Task:</strong><p style="background:var(--surface2); padding:6px; border-radius:4px; margin-top:2px;">${escapeHtml(ts.leader_task || '')}</p></div>
-                        <div><strong style="color:var(--text);">Wingmen Role:</strong><p style="background:var(--surface2); padding:6px; border-radius:4px; margin-top:2px;">${escapeHtml(ts.follower_task || '')}</p></div>
+                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${escapeHtml(JSON.stringify(st.leader_actions || [], null, 2))}</pre>
                     </div>
                     <div id="tab_s3" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
-                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${escapeHtml(JSON.stringify(st.leader_json || {}, null, 2))}</pre>
+                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${st.formation_params ? escapeHtml(JSON.stringify(st.formation_params, null, 2)) : 'N/A (Skipped for INDEPENDENT/SINGLE mode)'}</pre>
                     </div>
                     <div id="tab_s4" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
-                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${escapeHtml(JSON.stringify(fc, null, 2))}</pre>
+                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${st.follower_waypoints ? escapeHtml(JSON.stringify(st.follower_waypoints, null, 2)) : 'N/A (Skipped - Followers maintain geometric formation)'}</pre>
+                    </div>
+                    <div id="tab_s5" class="swarm-tab-pane" style="display:none; padding:10px; background:var(--surface); border-radius:4px; font-size:13px; height:310px; overflow-y:auto;">
+                        <pre style="margin:0; font-family:monospace; font-size:12px; color:var(--text);">${repairsCount > 0 ? escapeHtml(JSON.stringify(repairs, null, 2)) : 'No Pydantic schema repair attempts required ✓'}</pre>
                     </div>
                     <div style="display: flex; justify-content: flex-end; margin-top: 10px;">
                         <button onclick="revalidateMission()" style="background-color: var(--accent-blue); color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s;">🔄 Update & Re-validate</button>
@@ -1338,6 +1388,7 @@
             document.querySelectorAll('.swarm-tab-btn').forEach(b => {
                 b.style.background = 'var(--surface2)';
                 b.style.color = 'var(--text2)';
+                b.style.fontWeight = 'normal';
             });
             const pane = document.getElementById(tabId);
             if (pane) pane.style.display = 'block';
@@ -1345,6 +1396,7 @@
             if (btn) {
                 btn.style.background = 'var(--accent-blue)';
                 btn.style.color = '#fff';
+                btn.style.fontWeight = 'bold';
             }
         };
 
@@ -1505,7 +1557,8 @@
                 line: [[0, 0], [0, -5], [0, 5]],
                 column: [[0, 0], [-5, 0], [-10, 0]]
             };
-            const formationName = (mission.formation || 'wedge').toLowerCase();
+            const formationRaw = mission.formation || mission.formation_type || 'wedge';
+            const formationName = (typeof formationRaw === 'object' ? (formationRaw.type || 'wedge') : String(formationRaw)).toLowerCase();
             const offsets = formationOffsets[formationName] || formationOffsets.wedge;
 
             // Gather all points that must fit in bounds
@@ -1518,6 +1571,17 @@
                 if (area.max_n !== undefined) boundsN.push(Number(area.max_n));
                 if (area.min_e !== undefined) boundsE.push(Number(area.min_e));
                 if (area.max_e !== undefined) boundsE.push(Number(area.max_e));
+            }
+
+            if (mission.agents && Array.isArray(mission.agents)) {
+                mission.agents.forEach(ag => {
+                    if (ag.independent_actions && Array.isArray(ag.independent_actions)) {
+                        ag.independent_actions.filter(a => a.type === 'goto').forEach(a => {
+                            boundsN.push(Number(a.params.north_m) || 0);
+                            boundsE.push(Number(a.params.east_m) || 0);
+                        });
+                    }
+                });
             }
 
             waypoints.forEach(wp => {
@@ -1600,78 +1664,128 @@
 
             // Draw Swarm Paths or Standard Path
             if (mission.vehicle_type === 'swarm' && waypoints.length > 0) {
-                offsets.forEach(([dx, dy], droneIdx) => {
-                    const colors = [
-                        { path: 'rgba(249, 115, 22, 0.7)', dot: '#f97316', label: 'Leader' }, // Alpha (Leader)
-                        { path: 'rgba(59, 130, 246, 0.6)', dot: '#3b82f6', label: 'Bravo' },  // Follower 1
-                        { path: 'rgba(16, 185, 129, 0.6)', dot: '#10b981', label: 'Charlie' } // Follower 2
-                    ];
-                    const col = colors[droneIdx] || colors[0];
+                const hasIndependent = mission.agents && Array.isArray(mission.agents) && mission.agents.some(ag => ag.independent_actions && Array.isArray(ag.independent_actions) && ag.independent_actions.length > 0);
+                if (hasIndependent) {
+                    mission.agents.forEach((agent, droneIdx) => {
+                        const colors = [
+                            { path: 'rgba(249, 115, 22, 0.7)', dot: '#f97316', label: 'Leader' },
+                            { path: 'rgba(59, 130, 246, 0.6)', dot: '#3b82f6', label: 'Bravo' },
+                            { path: 'rgba(16, 185, 129, 0.6)', dot: '#10b981', label: 'Charlie' }
+                        ];
+                        const col = colors[droneIdx] || colors[0];
+                        const agentActions = (droneIdx === 0) ? (mission.actions || (mission.leader_mission && mission.leader_mission.actions) || []) : (agent.independent_actions || []);
+                        const agentWps = agentActions.filter(a => a.type === 'goto').map(a => ({ n: Number(a.params.north_m) || 0, e: Number(a.params.east_m) || 0 }));
+                        if (agentWps.length === 0) return;
 
-                    ctx.save();
-                    ctx.strokeStyle = col.path;
-                    ctx.lineWidth = droneIdx === 0 ? 2 : 1.5;
-                    if (droneIdx > 0) ctx.setLineDash([4, 4]);
+                        ctx.save();
+                        ctx.strokeStyle = col.path;
+                        ctx.lineWidth = droneIdx === 0 ? 2 : 1.5;
+                        if (droneIdx > 0) ctx.setLineDash([4, 4]);
 
-                    ctx.beginPath();
-                    const [start_x, start_y] = toCanvas(dx, dy); // at home
-                    ctx.moveTo(start_x, start_y);
+                        ctx.beginPath();
+                        const [start_x, start_y] = toCanvas(0, 0);
+                        ctx.moveTo(start_x, start_y);
+                        agentWps.forEach(wp => {
+                            const [x, y] = toCanvas(wp.n, wp.e);
+                            ctx.lineTo(x, y);
+                        });
+                        ctx.stroke();
+                        ctx.restore();
 
-                    waypoints.forEach(wp => {
-                        const heading_rad = Math.atan2(wp.e, wp.n);
-                        const cos_h = Math.cos(heading_rad);
-                        const sin_h = Math.sin(heading_rad);
-                        const rotated_n = dx * cos_h - dy * sin_h;
-                        const rotated_e = dx * sin_h + dy * cos_h;
+                        agentWps.forEach((wp, wpIdx) => {
+                            const [x, y] = toCanvas(wp.n, wp.e);
+                            ctx.fillStyle = col.path;
+                            ctx.beginPath();
+                            ctx.arc(x, y, droneIdx === 0 ? 10 : 7, 0, Math.PI * 2);
+                            ctx.fill();
 
-                        const [x, y] = toCanvas(wp.n + rotated_n, wp.e + rotated_e);
-                        ctx.lineTo(x, y);
+                            ctx.fillStyle = col.dot;
+                            ctx.beginPath();
+                            ctx.arc(x, y, droneIdx === 0 ? 5 : 3.5, 0, Math.PI * 2);
+                            ctx.fill();
+
+                            if (wpIdx === agentWps.length - 1) {
+                                ctx.fillStyle = col.dot;
+                                ctx.font = 'bold 10px Inter';
+                                ctx.textAlign = 'center';
+                                ctx.fillText(agent.id, x, y - 12);
+                            }
+                        });
                     });
+                } else {
+                    offsets.forEach(([dx, dy], droneIdx) => {
+                        const colors = [
+                            { path: 'rgba(249, 115, 22, 0.7)', dot: '#f97316', label: 'Leader' }, // Alpha (Leader)
+                            { path: 'rgba(59, 130, 246, 0.6)', dot: '#3b82f6', label: 'Bravo' },  // Follower 1
+                            { path: 'rgba(16, 185, 129, 0.6)', dot: '#10b981', label: 'Charlie' } // Follower 2
+                        ];
+                        const col = colors[droneIdx] || colors[0];
 
-                    if (mission.repeat_count > 1 && waypoints.length > 1) {
-                        const wp0 = waypoints[0];
-                        const heading_rad = Math.atan2(wp0.e, wp0.n);
-                        const cos_h = Math.cos(heading_rad);
-                        const sin_h = Math.sin(heading_rad);
-                        const rotated_n = dx * cos_h - dy * sin_h;
-                        const rotated_e = dx * sin_h + dy * cos_h;
-                        const [fx, fy] = toCanvas(wp0.n + rotated_n, wp0.e + rotated_e);
-                        ctx.lineTo(fx, fy);
-                    }
-                    ctx.stroke();
-                    ctx.restore();
+                        ctx.save();
+                        ctx.strokeStyle = col.path;
+                        ctx.lineWidth = droneIdx === 0 ? 2 : 1.5;
+                        if (droneIdx > 0) ctx.setLineDash([4, 4]);
 
-                    // Draw waypoints
-                    waypoints.forEach((wp, wpIdx) => {
-                        const heading_rad = Math.atan2(wp.e, wp.n);
-                        const cos_h = Math.cos(heading_rad);
-                        const sin_h = Math.sin(heading_rad);
-                        const rotated_n = dx * cos_h - dy * sin_h;
-                        const rotated_e = dx * sin_h + dy * cos_h;
-
-                        const [x, y] = toCanvas(wp.n + rotated_n, wp.e + rotated_e);
-
-                        // Outer glow
-                        ctx.fillStyle = col.path;
                         ctx.beginPath();
-                        ctx.arc(x, y, droneIdx === 0 ? 10 : 7, 0, Math.PI * 2);
-                        ctx.fill();
+                        const [start_x, start_y] = toCanvas(dx, dy); // at home
+                        ctx.moveTo(start_x, start_y);
 
-                        // Inner dot
-                        ctx.fillStyle = col.dot;
-                        ctx.beginPath();
-                        ctx.arc(x, y, droneIdx === 0 ? 5 : 3.5, 0, Math.PI * 2);
-                        ctx.fill();
+                        waypoints.forEach(wp => {
+                            const heading_rad = Math.atan2(wp.e, wp.n);
+                            const cos_h = Math.cos(heading_rad);
+                            const sin_h = Math.sin(heading_rad);
+                            const rotated_n = dx * cos_h - dy * sin_h;
+                            const rotated_e = dx * sin_h + dy * cos_h;
 
-                        // Label only leader waypoints
-                        if (droneIdx === 0 && waypoints.length <= 10) {
-                            ctx.fillStyle = '#94a3b8';
-                            ctx.font = '9px JetBrains Mono';
-                            ctx.textAlign = 'center';
-                            ctx.fillText(`WP${wpIdx + 1}`, x, y - 14);
+                            const [x, y] = toCanvas(wp.n + rotated_n, wp.e + rotated_e);
+                            ctx.lineTo(x, y);
+                        });
+
+                        if (mission.repeat_count > 1 && waypoints.length > 1) {
+                            const wp0 = waypoints[0];
+                            const heading_rad = Math.atan2(wp0.e, wp0.n);
+                            const cos_h = Math.cos(heading_rad);
+                            const sin_h = Math.sin(heading_rad);
+                            const rotated_n = dx * cos_h - dy * sin_h;
+                            const rotated_e = dx * sin_h + dy * cos_h;
+                            const [fx, fy] = toCanvas(wp0.n + rotated_n, wp0.e + rotated_e);
+                            ctx.lineTo(fx, fy);
                         }
+                        ctx.stroke();
+                        ctx.restore();
+
+                        // Draw waypoints
+                        waypoints.forEach((wp, wpIdx) => {
+                            const heading_rad = Math.atan2(wp.e, wp.n);
+                            const cos_h = Math.cos(heading_rad);
+                            const sin_h = Math.sin(heading_rad);
+                            const rotated_n = dx * cos_h - dy * sin_h;
+                            const rotated_e = dx * sin_h + dy * cos_h;
+
+                            const [x, y] = toCanvas(wp.n + rotated_n, wp.e + rotated_e);
+
+                            // Outer glow
+                            ctx.fillStyle = col.path;
+                            ctx.beginPath();
+                            ctx.arc(x, y, droneIdx === 0 ? 10 : 7, 0, Math.PI * 2);
+                            ctx.fill();
+
+                            // Inner dot
+                            ctx.fillStyle = col.dot;
+                            ctx.beginPath();
+                            ctx.arc(x, y, droneIdx === 0 ? 5 : 3.5, 0, Math.PI * 2);
+                            ctx.fill();
+
+                            // Label only leader waypoints
+                            if (droneIdx === 0 && waypoints.length <= 10) {
+                                ctx.fillStyle = '#94a3b8';
+                                ctx.font = '9px JetBrains Mono';
+                                ctx.textAlign = 'center';
+                                ctx.fillText(`WP${wpIdx + 1}`, x, y - 14);
+                            }
+                        });
                     });
-                });
+                }
             } else if (waypoints.length > 0) {
                 // Draw standard path
                 ctx.save();
@@ -1894,7 +2008,7 @@
                     if (data.drone_logs && data.drone_logs.length > 0) {
                         const currentMode = document.querySelector('input[name="opMode"]:checked').value;
                         const isSwarm = (currentMode === 'swarm');
-                        const limit = isSwarm ? 3 : 1;
+                        const limit = isSwarm ? (document.querySelectorAll('.drone-log-box').length || 3) : 1;
 
                         for (let i = 0; i < limit; i++) {
                             const entriesEl = document.getElementById(`droneLogEntries_${i}`);
@@ -1935,6 +2049,81 @@
                     const isConnected = !!tel.connected;
                     badge.textContent = isConnected ? 'Connected' : 'Disconnected';
                     badge.className = `card-badge ${isConnected ? 'badge-success' : 'badge-error'}`;
+
+                                        // Live Coordinates Update
+                    const coordsContainer = document.getElementById('liveCoordsContainer');
+                    if (coordsContainer) {
+                        const numDrones = document.querySelector('input[name="opMode"]:checked').value === 'swarm' ? 3 : 1;
+                        let coordsHtml = '';
+                        
+                        function getDistance3D(lat1, lon1, alt1, lat2, lon2, alt2) {
+                            if (lat1 === undefined || lat2 === undefined) return Infinity;
+                            const R = 6371e3;
+                            const phi1 = lat1 * Math.PI / 180;
+                            const phi2 = lat2 * Math.PI / 180;
+                            const dPhi = (lat2 - lat1) * Math.PI / 180;
+                            const dLambda = (lon2 - lon1) * Math.PI / 180;
+                            const a = Math.sin(dPhi/2) * Math.sin(dPhi/2) + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda/2) * Math.sin(dLambda/2);
+                            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+                            const groundDist = R * c;
+                            const altDist = alt1 - alt2;
+                            return Math.sqrt(groundDist * groundDist + altDist * altDist);
+                        }
+
+                        for (let i = 0; i < numDrones; i++) {
+                            const d = tel.drones[i];
+                            if (d && d.connected) {
+                                // Calculate min distance to any other connected drone
+                                let minDist = Infinity;
+                                for (let j = 0; j < numDrones; j++) {
+                                    if (i !== j && tel.drones[j] && tel.drones[j].connected) {
+                                        const dist = getDistance3D(d.latitude, d.longitude, d.altitude_m, tel.drones[j].latitude, tel.drones[j].longitude, tel.drones[j].altitude_m);
+                                        if (dist < minDist) minDist = dist;
+                                    }
+                                }
+                                
+                                let bgColor = 'var(--surface2)';
+                                let borderColor = 'var(--border)';
+                                let textColor = 'var(--text)';
+                                
+                                if (numDrones > 1 && minDist !== Infinity) {
+                                    if (minDist <= 0.5) {
+                                        // Red (Very close / Collision risk)
+                                        bgColor = 'rgba(220, 38, 38, 0.15)'; // faint red
+                                        borderColor = '#dc2626'; // red
+                                    } else if (minDist <= 1.0) {
+                                        // Yellow (Warning)
+                                        bgColor = 'rgba(217, 119, 6, 0.15)'; // faint yellow/orange
+                                        borderColor = '#d97706'; // yellow/orange
+                                    } else {
+                                        // Green (Safe)
+                                        bgColor = 'rgba(22, 163, 74, 0.15)'; // faint green
+                                        borderColor = '#16a34a'; // green
+                                    }
+                                } else if (numDrones === 1) {
+                                    // Default Green for single drone if connected
+                                    bgColor = 'rgba(22, 163, 74, 0.15)';
+                                    borderColor = '#16a34a';
+                                }
+
+                                coordsHtml += `
+                                    <div style="background: ${bgColor}; padding: 4px 10px; border-radius: 4px; border: 1px solid ${borderColor}; transition: all 0.3s ease;">
+                                        <span style="color: var(--accent-orange); font-weight: 600;">D${i+1}</span> 
+                                        Lat: <span style="color: ${textColor};">${d.latitude ? d.latitude.toFixed(6) : '0.000000'}</span> 
+                                        Lon: <span style="color: ${textColor};">${d.longitude ? d.longitude.toFixed(6) : '0.000000'}</span> 
+                                        Alt: <span style="color: ${textColor};">${d.altitude_m ? d.altitude_m.toFixed(1) : '0.0'}m</span>
+                                    </div>
+                                `;
+                            } else {
+                                coordsHtml += `
+                                    <div style="background: var(--surface2); padding: 4px 10px; border-radius: 4px; border: 1px solid var(--border); opacity: 0.5;">
+                                        <span style="color: var(--text3); font-weight: 600;">D${i+1}</span>: Offline
+                                    </div>
+                                `;
+                            }
+                        }
+                        coordsContainer.innerHTML = coordsHtml;
+                    }
 
                     // Update manual override section visibility and enablement
                     const status = data.status || 'idle';
@@ -2072,6 +2261,7 @@
                 }
                 if (final_transcript) {
                     input.value = final_transcript;
+                    handleSubmit();
                 }
             };
 
@@ -2211,6 +2401,7 @@
                     const data = await res.json();
                     if (data.success && data.text) {
                         input.value = data.text;
+                        handleSubmit();
                     } else {
                         alert("Transcription failed: " + (data.error || "Unintelligible speech"));
                     }

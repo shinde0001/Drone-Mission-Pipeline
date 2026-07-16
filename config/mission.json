@@ -1,0 +1,15 @@
+{
+  "max_altitude_m": 50.0,
+  "min_altitude_m": 2.0,
+  "max_speed_mps": 15.0,
+  "max_agents": 5,
+  "geofence": {
+    "shape": "box",
+    "min_north_m": -200.0,
+    "max_north_m": 200.0,
+    "min_east_m": -200.0,
+    "max_east_m": 200.0
+  },
+  "min_separation_m": 3.0,
+  "return_to_launch_on_violation": true
+}

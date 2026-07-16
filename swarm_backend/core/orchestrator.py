@@ -33,10 +33,10 @@ class SwarmOrchestrator:
 
         # Initialize core swarm modules
         self.formation_controller = FormationController(
-            formation_type=mission.formation.type,
-            spacing_m=mission.formation.spacing_m,
-            angle_deg=mission.formation.angle_deg,
-            frame=mission.formation.frame
+            formation_type=mission.formation.type if mission.formation else "wedge",
+            spacing_m=mission.formation.spacing_m if mission.formation else 5.0,
+            angle_deg=mission.formation.angle_deg if mission.formation else 135.0,
+            frame=mission.formation.frame if mission.formation else "body_relative"
         )
 
         self.collision_avoidance = CollisionAvoidance(
@@ -87,7 +87,7 @@ class SwarmOrchestrator:
 
             # 2. Takeoff sequence (all vehicles in parallel)
             takeoff_action = next((a for a in self.mission.leader_mission.actions if a.type == "takeoff"), None)
-            takeoff_alt = takeoff_action.params.get("altitude_m", 10.0) if takeoff_action else 10.0
+            takeoff_alt = (takeoff_action.params.get("altitude_m", 10.0) if isinstance(takeoff_action.params, dict) else getattr(takeoff_action.params, "altitude_m", 10.0)) if takeoff_action else 10.0
             
             logger.info(f"Commanding all vehicles to takeoff to {takeoff_alt}m...")
             await asyncio.gather(*(agent.takeoff(takeoff_alt) for agent in self.agents.values()))
@@ -110,24 +110,29 @@ class SwarmOrchestrator:
             logger.info("Initializing offboard modes...")
             await asyncio.gather(*(agent.start_offboard() for agent in self.agents.values()))
 
-            # 4. Start high-frequency follower control loop
-            self._control_task = asyncio.create_task(self._follower_control_loop())
+            # 4. Start high-frequency follower control loop for formation-tracking followers
+            formation_followers = [
+                a for a in self.mission.agents
+                if a.role in ("wingman_left", "wingman_right") and not a.independent_actions and self._mode != "INDEPENDENT"
+            ]
+            if formation_followers:
+                self._control_task = asyncio.create_task(self._follower_control_loop(formation_followers))
 
-            # 5. Execute Leader Waypoint Actions
+            # 5. Execute Leader and Independent Follower Waypoint Actions Concurrently
             leader_id = next(a.id for a in self.mission.agents if a.role == "leader")
             leader_agent = self.agents[leader_id]
 
-            for action in self.mission.leader_mission.actions:
-                if not self._running:
-                    break
-                if action.type in ("takeoff", "land", "return_to_launch"):
-                    continue
+            tasks = [self._execute_agent_actions(leader_agent, self.mission.leader_mission.actions, "Leader")]
 
-                logger.info(f"Leader starting action: {action.type} with params {action.params}")
-                if action.type == "goto":
-                    await self._execute_goto(leader_agent, action)
-                elif action.type == "loiter":
-                    await asyncio.sleep(action.params.get("duration_s", 5.0))
+            for f_conf in self.mission.agents:
+                if f_conf.role == "leader":
+                    continue
+                if f_conf.independent_actions or self._mode == "INDEPENDENT":
+                    f_agent = self.agents[f_conf.id]
+                    actions = f_conf.independent_actions or self.mission.leader_mission.actions
+                    tasks.append(self._execute_agent_actions(f_agent, actions, f_conf.id.replace("_", " ").title()))
+
+            await asyncio.gather(*tasks)
 
             # 6. Land / Return To Launch Sequence
             self._running = False
@@ -153,7 +158,6 @@ class SwarmOrchestrator:
                 disarmed = True
                 for agent_id, agent in self.agents.items():
                     pos = self.state_bus.get_position(agent_id)
-                    # Simple heuristic: altitude close to 0
                     if -pos[2] > 0.5:
                         disarmed = False
                         break
@@ -168,24 +172,52 @@ class SwarmOrchestrator:
             await self.emergency_land()
             raise e
 
-    async def _execute_goto(self, leader_agent: DroneAgent, action: Action) -> None:
-        """Guide the leader agent to a waypoint, updating heading dynamically."""
-        target_n = action.params["north_m"]
-        target_e = action.params["east_m"]
-        target_d = -action.params["altitude_m"]
-        speed = action.params["speed_mps"]
+    async def _execute_agent_actions(self, agent: DroneAgent, actions: List[Action], role_name: str) -> None:
+        """Execute a sequence of actions (goto, loiter, sweep) for a specific agent."""
+        if not actions:
+            return
+        for step_idx, action in enumerate(actions):
+            if not self._running:
+                break
+            if action.type in ("takeoff", "land", "return_to_launch"):
+                continue
+
+            logger.info(f"[{role_name}] starting action {step_idx + 1}/{len(actions)}: {action.type}")
+            if action.type == "goto":
+                await self._execute_goto(agent, action)
+            elif action.type == "loiter":
+                params = action.params if isinstance(action.params, dict) else action.params.model_dump()
+                await asyncio.sleep(params.get("duration_s", 5.0))
+            elif action.type == "sweep":
+                from swarm_backend.config.schema import SweepParams, Action as SchemaAction
+                from swarm_backend.core.task_manager import generate_lawn_mower_waypoints
+                params = action.params if isinstance(action.params, dict) else action.params.model_dump()
+                sweep_params = SweepParams(**params)
+                goto_wpts = generate_lawn_mower_waypoints(sweep_params)
+                logger.info(f"[{role_name}] executing sweep with {len(goto_wpts)} lawn-mower waypoints")
+                for w in goto_wpts:
+                    if not self._running:
+                        break
+                    await self._execute_goto(agent, w)
+
+    async def _execute_goto(self, agent: DroneAgent, action: Action) -> None:
+        """Guide an agent to a waypoint, updating heading dynamically."""
+        params = action.params if isinstance(action.params, dict) else action.params.model_dump()
+        target_n = params["north_m"]
+        target_e = params["east_m"]
+        target_d = -params["altitude_m"]
+        speed = params.get("speed_mps", 5.0)
 
         while self._running:
-            leader_pos = self.state_bus.get_position(leader_agent.agent_id)
-            dn = target_n - leader_pos[0]
-            de = target_e - leader_pos[1]
-            dd = target_d - leader_pos[2]
+            pos = self.state_bus.get_position(agent.agent_id)
+            dn = target_n - pos[0]
+            de = target_e - pos[1]
+            dd = target_d - pos[2]
             dist = math.sqrt(dn**2 + de**2)
 
             if dist <= WAYPOINT_TOLERANCE_M:
                 break
 
-            # Calculate movement vector scaled by desired speed
             angle = math.atan2(de, dn)
             heading_deg = math.degrees(angle) % 360
 
@@ -193,21 +225,19 @@ class SwarmOrchestrator:
             ve = speed * math.sin(angle)
             vd = speed * (dd / dist) if dist > 0 else 0.0
 
-            # Enforce safety envelope limits on the leader
             clamped_pos, clamped_vel = self.safety_envelope.enforce(
                 (target_n, target_e, target_d), (vn, ve, vd)
             )
 
-            await leader_agent.set_offboard_position_velocity(
+            await agent.set_offboard_position_velocity(
                 PositionNedYaw(clamped_pos[0], clamped_pos[1], clamped_pos[2], heading_deg),
                 VelocityNedYaw(clamped_vel[0], clamped_vel[1], clamped_vel[2], heading_deg)
             )
             await asyncio.sleep(LOOP_INTERVAL_S)
 
-    async def _follower_control_loop(self) -> None:
-        """High-frequency control loop for followers (wingmen)."""
+    async def _follower_control_loop(self, followers: List[Any]) -> None:
+        """High-frequency control loop for formation-following wingmen."""
         leader_id = next(a.id for a in self.mission.agents if a.role == "leader")
-        followers = [a for a in self.mission.agents if a.role in ("wingman_left", "wingman_right")]
 
         try:
             while self._running:
@@ -220,53 +250,37 @@ class SwarmOrchestrator:
                     f_agent = self.agents[fid]
                     f_pos = self.state_bus.get_position(fid)
 
-                    # Dynamic Regroup state machine logic
                     dist_to_leader = math.sqrt((f_pos[0] - leader_pos[0])**2 + (f_pos[1] - leader_pos[1])**2)
                     
                     if self._mode == "REGROUP":
-                        # If close enough, switch back to formation
                         if dist_to_leader <= self.formation_controller.spacing_m * 1.5:
-                            logger.info(f"Follower {fid} close enough. Switching from REGROUP to FORMATION.")
+                            logger.info(f"Follower {fid} converged. Switching from REGROUP to FORMATION.")
                             self._mode = "FORMATION"
 
-                    # 1. Geometry Projection (Body-relative offsets)
-                    if self._mode == "INDEPENDENT":
-                        # Mirror waypoint sequence but apply a static offset in world frame
-                        offset_role_multiplier = -1.0 if follower_conf.role == "wingman_left" else 1.0
-                        target_n = leader_pos[0]
-                        target_e = leader_pos[1] + (offset_role_multiplier * self.formation_controller.spacing_m)
-                        target_d = leader_pos[2]
-                    else:  # FORMATION or REGROUP
-                        target_n, target_e, target_d = self.formation_controller.calculate_target_position(
-                            leader_pos, leader_heading, follower_conf.role, follower_conf.slot or 1
-                        )
+                    target_n, target_e, target_d = self.formation_controller.calculate_target_position(
+                        leader_pos, leader_heading, follower_conf.role, follower_conf.slot or 1
+                    )
 
-                    # 2. Feedforward + Position tracking velocity calculation
                     vn, ve, vd = self.formation_controller.calculate_feedforward_velocity(
                         leader_vel, (target_n, target_e, target_d), f_pos, gain_kp=1.0,
                         max_correction_mps=self.mission.safety.max_correction_mps
                     )
 
-                    # 3. Collision Avoidance (Artificial Potential Field + Altitude Stacking)
                     other_positions = self.state_bus.all_positions_except(fid)
                     
-                    # Proximity check for altitude stacking override
                     for other_pos in other_positions:
                         h_dist = math.sqrt((f_pos[0] - other_pos[0])**2 + (f_pos[1] - other_pos[1])**2)
                         if h_dist < self.mission.safety.collision_radius_m:
-                            # Apply altitude stacking
                             stack_offset = self.mission.safety.altitude_separation_m
                             if follower_conf.role == "wingman_left":
-                                target_d -= stack_offset  # Fly higher
+                                target_d -= stack_offset
                             else:
-                                target_d += stack_offset  # Fly lower
+                                target_d += stack_offset
 
-                    # Superimpose potential field forces onto velocities
                     vn, ve, vd = self.collision_avoidance.apply_avoidance_to_velocity(
                         (vn, ve, vd), f_pos, other_positions
                     )
 
-                    # 4. Safety Envelope limits clamping
                     clamped_pos, clamped_vel = self.safety_envelope.enforce(
                         (target_n, target_e, target_d), (vn, ve, vd)
                     )

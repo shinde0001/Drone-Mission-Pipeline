@@ -118,4 +118,72 @@ class TestSchema(unittest.TestCase):
         ]
         with self.assertRaises(ValidationError) as ctx:
             Mission(**data)
-        self.assertIn("must match exactly", str(ctx.exception))
+        self.assertIn("connections IDs must match exactly the agents IDs", str(ctx.exception))
+
+    def test_duplicate_agent_ids(self):
+        data = self.valid_data.copy()
+        data["agents"] = [
+            { "id": "leader",  "role": "leader" },
+            { "id": "drone_1", "role": "wingman_left", "slot": 1 },
+            { "id": "drone_1", "role": "wingman_right", "slot": 2 }
+        ]
+        data["connections"] = [
+            { "id": "leader",  "udp": "udp://:14540" },
+            { "id": "drone_1", "udp": "udp://:14541" },
+            { "id": "drone_1", "udp": "udp://:14542" }
+        ]
+        with self.assertRaises(ValidationError) as ctx:
+            Mission(**data)
+        self.assertIn("duplicate agent ids", str(ctx.exception))
+
+    def test_invalid_altitude_exceeds_max(self):
+        data = self.valid_data.copy()
+        data["leader_mission"] = {
+            "actions": [
+                { "type": "takeoff", "params": { "altitude_m": 100.0 } },  # Exceeds max_altitude_m=50.0
+                { "type": "land", "params": {} }
+            ]
+        }
+        with self.assertRaises(ValidationError) as ctx:
+            Mission(**data)
+        self.assertIn("exceeds max_altitude_m", str(ctx.exception))
+
+    def test_invalid_speed_exceeds_max(self):
+        data = self.valid_data.copy()
+        data["leader_mission"] = {
+            "actions": [
+                { "type": "takeoff", "params": { "altitude_m": 15.0 } },
+                { "type": "goto", "params": { "north_m": 40.0, "east_m": 0.0, "altitude_m": 15.0, "speed_mps": 30.0 } },  # Exceeds max_speed_mps=15.0
+                { "type": "land", "params": {} }
+            ]
+        }
+        with self.assertRaises(ValidationError) as ctx:
+            Mission(**data)
+        self.assertIn("exceeds max_speed_mps", str(ctx.exception))
+
+    def test_invalid_target_outside_geofence(self):
+        data = self.valid_data.copy()
+        data["leader_mission"] = {
+            "actions": [
+                { "type": "takeoff", "params": { "altitude_m": 15.0 } },
+                { "type": "goto", "params": { "north_m": 2000.0, "east_m": 0.0, "altitude_m": 15.0, "speed_mps": 5.0 } },  # Outside geofence
+                { "type": "land", "params": {} }
+            ]
+        }
+        with self.assertRaises(ValidationError) as ctx:
+            Mission(**data)
+        self.assertIn("outside the configured geofence", str(ctx.exception))
+
+    def test_exceeds_max_agents(self):
+        data = self.valid_data.copy()
+        agents = [{ "id": "leader", "role": "leader" }]
+        connections = [{ "id": "leader", "udp": "udp://:14540" }]
+        for i in range(1, 15):  # Exceeds max_agents (e.g. 10)
+            agents.append({ "id": f"drone_{i}", "role": "wingman_left", "slot": i })
+            connections.append({ "id": f"drone_{i}", "udp": f"udp://:{14540+i}" })
+        data["agents"] = agents
+        data["connections"] = connections
+        with self.assertRaises(ValidationError) as ctx:
+            Mission(**data)
+        self.assertIn("exceeds max_agents", str(ctx.exception))
+

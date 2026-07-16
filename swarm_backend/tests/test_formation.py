@@ -8,8 +8,6 @@ class TestFormationController(unittest.TestCase):
         controller = FormationController(formation_type="wedge", spacing_m=10.0, angle_deg=135.0)
         
         # Wingman left, slot 1
-        # dx = 1 * 10 * cos(135 deg) = 10 * (-0.707) = -7.07
-        # dy = -1 * 10 * sin(135 deg) = -10 * 0.707 = -7.07
         dx_l, dy_l, dz_l = controller.calculate_body_offset("wingman_left", 1)
         self.assertAlmostEqual(dx_l, 10.0 * math.cos(math.radians(135.0)))
         self.assertAlmostEqual(dy_l, -10.0 * math.sin(math.radians(135.0)))
@@ -23,42 +21,39 @@ class TestFormationController(unittest.TestCase):
 
     def test_line_body_offsets(self):
         controller = FormationController(formation_type="line", spacing_m=5.0)
-        dx_l, dy_l, _ = controller.calculate_body_offset("wingman_left", 2)
+        # Slot 3 (wingman_left rank 2)
+        dx_l, dy_l, _ = controller.calculate_body_offset("wingman_left", 3)
         self.assertEqual(dx_l, 0.0)
         self.assertEqual(dy_l, -10.0)
 
     def test_heading_rotation(self):
         # Wedge with spacing 5m, angle 135 deg.
         controller = FormationController(formation_type="wedge", spacing_m=5.0, angle_deg=135.0, frame="body_relative")
-        
         leader_pos = (100.0, 100.0, -10.0)
-        
-        # Heading 90 deg (facing East)
-        # Leader is moving East. Wingman left (behind & left of leader) should be:
-        # Behind leader = North offset is negative. Left of leader = East offset is negative.
-        # Rotating body offset (-3.53, -3.53) by 90 deg:
-        # offset_n = dx * cos(90) - dy * sin(90) = dx * 0 - dy * 1 = -dy = 3.53
-        # offset_e = dx * sin(90) + dy * cos(90) = dx * 1 + dy * 0 = dx = -3.53
-        # target_n = 100 + 3.53 = 103.53
-        # target_e = 100 - 3.53 = 96.47
         dx, dy, _ = controller.calculate_body_offset("wingman_left", 1)
-        target_n, target_e, target_d = controller.calculate_target_position(leader_pos, 90.0, "wingman_left", 1)
         
-        expected_n = leader_pos[0] - dy
-        expected_e = leader_pos[1] + dx
-        self.assertAlmostEqual(target_n, expected_n)
-        self.assertAlmostEqual(target_e, expected_e)
-        self.assertEqual(target_d, -10.0)
+        # Heading 0 deg (facing North)
+        # Rotating body offset (dx, dy) by 0 deg -> world offset is (dx, dy)
+        target_n_0, target_e_0, target_d_0 = controller.calculate_target_position(leader_pos, 0.0, "wingman_left", 1)
+        self.assertAlmostEqual(target_n_0, leader_pos[0] + dx)
+        self.assertAlmostEqual(target_e_0, leader_pos[1] + dy)
+        self.assertEqual(target_d_0, -10.0)
 
-    def test_world_ned_no_rotation(self):
-        controller = FormationController(formation_type="wedge", spacing_m=5.0, angle_deg=135.0, frame="world_ned")
-        leader_pos = (100.0, 100.0, -10.0)
-        dx, dy, _ = controller.calculate_body_offset("wingman_left", 1)
-        
-        # With world_ned frame, target coordinates are leader_pos + raw body offsets, ignore heading
-        target_n, target_e, target_d = controller.calculate_target_position(leader_pos, 270.0, "wingman_left", 1)
-        self.assertEqual(target_n, leader_pos[0] + dx)
-        self.assertEqual(target_e, leader_pos[1] + dy)
+        # Heading 90 deg (facing East)
+        # Rotating body offset by 90 deg -> world offset is (-dy, dx)
+        target_n_90, target_e_90, target_d_90 = controller.calculate_target_position(leader_pos, 90.0, "wingman_left", 1)
+        self.assertAlmostEqual(target_n_90, leader_pos[0] - dy)
+        self.assertAlmostEqual(target_e_90, leader_pos[1] + dx)
+        self.assertEqual(target_d_90, -10.0)
+
+        # Verify target position strictly differs when heading rotates
+        self.assertNotEqual(target_n_0, target_n_90)
+        self.assertNotEqual((target_n_0, target_e_0), (target_n_90, target_e_90))
+
+    def test_invalid_world_ned_frame(self):
+        with self.assertRaises(ValueError) as ctx:
+            FormationController(formation_type="wedge", spacing_m=5.0, angle_deg=135.0, frame="world_ned")
+        self.assertIn("only supports 'body_relative' frame", str(ctx.exception))
 
     def test_feedforward_velocity_clamping(self):
         controller = FormationController()
@@ -66,12 +61,13 @@ class TestFormationController(unittest.TestCase):
         target_pos = (10.0, 10.0, -10.0)
         follower_pos = (0.0, 0.0, -10.0)
         
-        # Pos errors = 10.0, 10.0, 0.0. Kp = 1.0. Corrections = 10.0, 10.0, 0.0.
-        # Clamped corrections at max_correction_mps = 2.0.
-        # Desired velocities: leader_vel + clamped corrections = (2.0 + 2.0, 3.0 + 2.0, 0.0 + 0.0) = (4.0, 5.0, 0.0)
         vn, ve, vd = controller.calculate_feedforward_velocity(
             leader_vel, target_pos, follower_pos, gain_kp=1.0, max_correction_mps=2.0
         )
         self.assertEqual(vn, 4.0)
         self.assertEqual(ve, 5.0)
         self.assertEqual(vd, 0.0)
+
+if __name__ == "__main__":
+    unittest.main()
+

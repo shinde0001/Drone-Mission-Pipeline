@@ -28,6 +28,22 @@ from .utils import (
     print_success,
     setup_logger,
 )
+from swarm_backend.config.schema import (
+    load_user_constraints,
+    Mission,
+    MissionMode,
+    FormationType,
+    AgentRole,
+    Action,
+)
+from swarm_backend.llm.prompts import (
+    SWARM_CLASSIFY_PROMPT,
+    SWARM_LEADER_ACTIONS_PROMPT,
+    SWARM_FORMATION_PARAMS_PROMPT,
+    SWARM_FOLLOWER_WAYPOINTS_PROMPT,
+    SWARM_REPAIR_PROMPT,
+)
+from swarm_backend.core.task_manager import generate_lawn_mower_waypoints
 
 logger = setup_logger("llm_planner")
 
@@ -122,71 +138,7 @@ Return ONLY a valid JSON object matching this structure:
 Do NOT include any text before or after the JSON. Output ONLY the JSON object.
 """
 
-SWARM_PROMPT_CLEANUP = """You are a drone command preprocessor and state manager. Do two things:
-1. Fix spelling, grammar, and ambiguity in the user's command. Make it clear and concise.
-2. Classify the intent into one of three operational modes:
-   - FORMATION: Drones fly together in a coordinated shape (wedge, line, column, V-shape) following a leader route.
-   - INDEPENDENT: Drones split up or take on independent tasks/routes (e.g. Alpha checks warehouse, Bravo/Charlie sweep perimeter).
-   - REGROUP: Drones rally or converge to a single location from different positions.
-
-Return ONLY a valid JSON object:
-{"cleaned_prompt": "<clear natural language command>", "mode": "FORMATION|INDEPENDENT|REGROUP"}
-Do NOT include any text or markdown before or after the JSON.
-"""
-
-SWARM_PROMPT_TASK_SPLIT = """You are a drone swarm commander specializing in Spatial Reasoning and Task Allocation for 3 drones: Leader (Alpha), Follower 1 (Bravo), Follower 2 (Charlie).
-
-Based on the cleaned prompt and operational mode, output structured instructions:
-- If FORMATION: Translate abstract shapes (wedge, line, column) into relative coordinate offsets for followers. Default spacing is 5m.
-  Wedge = Follower 1 [-spacing_m, -spacing_m], Follower 2 [-spacing_m, +spacing_m]
-  Line = Follower 1 [0, -spacing_m], Follower 2 [0, +spacing_m]
-  Column = Follower 1 [-spacing_m, 0], Follower 2 [-2*spacing_m, 0]
-- If INDEPENDENT: Assign specific tasks/routes to Leader, Follower 1, and Follower 2.
-- If REGROUP: Define the rally coordinate offset and the formation to adopt once gathered.
-
-Return ONLY a valid JSON object matching this structure:
-{
-  "leader_task": "<clear instruction for leader drone navigation path or actions>",
-  "follower_task": "<clear instruction summarizing what followers should do>",
-  "formation": "wedge|line|column",
-  "spacing_m": 5,
-  "mode": "FORMATION|INDEPENDENT|REGROUP",
-  "follower_1_offsets": [-5, -5],
-  "follower_2_offsets": [-5, 5],
-  "independent_tasks": null
-}
-Do NOT include any text or markdown before or after the JSON.
-"""
-
-SWARM_PROMPT_FOLLOWER_CONFIG = """You are a follower drone configuration generator for a 3-drone squad.
-The leader drone will execute: {leader_summary}
-The follower task instructions are: {follower_task}
-
-Generate the exact configuration for Follower 1 and Follower 2.
-Followers maintain formation relative to the leader unless assigned independent actions.
-
-Return ONLY a valid JSON object matching this structure:
-{{
-  "behavior": "maintain_formation|independent|regroup",
-  "formation": "{formation}",
-  "spacing_m": {spacing_m},
-  "collision_radius_m": 1.0,
-  "altitude_separation_m": 1.0,
-  "follower_1": {{
-    "role": "wingman_left",
-    "offset_north_m": {f1_n},
-    "offset_east_m": {f1_e},
-    "independent_actions": null
-  }},
-  "follower_2": {{
-    "role": "wingman_right",
-    "offset_north_m": {f2_n},
-    "offset_east_m": {f2_e},
-    "independent_actions": null
-  }}
-}}
-Do NOT include any text or markdown before or after the JSON.
-"""
+# Old prompt definitions superseded by swarm_backend/llm/prompts.py
 
 # ── Compact system prompt (for small local models like llama3.2:1b) ────
 SYSTEM_PROMPT_COMPACT = """You are a drone mission planner. Convert the user command into a JSON mission plan.
@@ -1017,172 +969,192 @@ def _call_llm_json(system_prompt: str, user_prompt: str, few_shot_examples: list
     return None
 
 
+def _expand_sweep_actions(actions: list) -> list:
+    """Helper to expand any 'sweep' actions into concrete lawn-mower 'goto' waypoints."""
+    expanded = []
+    for act in actions:
+        if isinstance(act, dict) and act.get("type") == "sweep":
+            try:
+                from swarm_backend.config.schema import SweepParams
+                sweep_obj = SweepParams(**act.get("params", {}))
+                goto_list = generate_lawn_mower_waypoints(sweep_obj)
+                for g in goto_list:
+                    expanded.append(g.model_dump())
+            except Exception as e:
+                logger.warning(f"Failed to expand sweep action: {e}")
+                expanded.append(act)
+        else:
+            expanded.append(act)
+    return expanded
+
+
 def plan_swarm_mission(prompt: str, ai_engine: str = "offline", api_key: str = None, num_drones: int = 3) -> dict:
     """
-    4-stage sequential LLM prompting chain for multi-agent swarm missions.
-    All 4 calls use the same model selected by `ai_engine`.
+    Unified 5-Stage LLM prompting chain with true INDEPENDENT mode waypoints and Pydantic repair loop.
+    All calls use concise JSON schemas optimized for both offline/small and online models.
     """
-    logger.info(f"Starting 4-stage swarm mission planning for prompt: '{prompt}'")
+    logger.info(f"Starting Unified 5-Stage Swarm Mission Planning for prompt: '{prompt}'")
     client, gemini_client, model_name, is_local = _setup_llm_client(ai_engine, api_key)
+    stages = {"repairs": []}
 
-    # ── Call 1: Prompt Cleanup & Intent Classification ──
-    logger.info("Swarm Stage 1/4: Prompt Cleanup & Intent Classification...")
-    ex_cleanup = [
-        {
-            "user": "three drone wedge patrol north 40m east 10m",
-            "assistant": json.dumps({"cleaned_prompt": "Three drones patrol in a wedge formation 40 meters north and 10 meters east.", "mode": "FORMATION"})
-        },
-        {
-            "user": "alpha inspect roof, bravo and charlie sweep perimeter loop",
-            "assistant": json.dumps({"cleaned_prompt": "Leader (Alpha) inspects the roof at altitude 15m. Follower 1 (Bravo) and Follower 2 (Charlie) sweep the perimeter loop.", "mode": "INDEPENDENT"})
-        },
-        {
-            "user": "everyone rally and regroup at central tower north 20m east 20m",
-            "assistant": json.dumps({"cleaned_prompt": "All three drones converge and rally at north 20 meters, east 20 meters in a wedge formation.", "mode": "REGROUP"})
-        }
-    ]
-    res_cleanup = _call_llm_json(SWARM_PROMPT_CLEANUP, prompt, ex_cleanup, ai_engine, model_name, client, gemini_client, is_local)
-    if res_cleanup:
-        cleaned_prompt = res_cleanup.get("cleaned_prompt", prompt)
-        mode = res_cleanup.get("mode", "FORMATION").upper()
-        if mode not in ("FORMATION", "INDEPENDENT", "REGROUP"):
-            mode = "FORMATION"
-    else:
-        cleaned_prompt = prompt
-        mode = "FORMATION"
-    logger.info(f"Swarm Stage 1 Result: mode={mode}, cleaned='{cleaned_prompt}'")
-
-    # ── Call 2: Task Allocation & Spatial Reasoning ──
-    logger.info("Swarm Stage 2/4: Task Allocation & Spatial Reasoning...")
-    ex_split = [
-        {
-            "user": "Command: Three drones patrol in a wedge formation 40 meters north and 10 meters east.\nOperational Mode: FORMATION",
-            "assistant": json.dumps({
-                "leader_task": "Takeoff to 12m, fly north 40m east 10m at 5 m/s, loiter 5s, then land.",
-                "follower_task": "Maintain wedge formation relative to the leader throughout the flight.",
-                "formation": "wedge",
-                "spacing_m": 5,
-                "mode": "FORMATION",
-                "follower_1_offsets": [-5, -5],
-                "follower_2_offsets": [-5, 5],
-                "independent_tasks": None
-            })
-        },
-        {
-            "user": "Command: Leader (Alpha) inspects the roof at altitude 15m. Follower 1 (Bravo) and Follower 2 (Charlie) sweep the perimeter loop.\nOperational Mode: INDEPENDENT",
-            "assistant": json.dumps({
-                "leader_task": "Takeoff to 15m, fly to north 20m east 0m and loiter 15 seconds, then land.",
-                "follower_task": "Follower 1 flies north 0m east 25m; Follower 2 flies north 0m east -25m.",
-                "formation": "wedge",
-                "spacing_m": 5,
-                "mode": "INDEPENDENT",
-                "follower_1_offsets": [-5, -5],
-                "follower_2_offsets": [-5, 5],
-                "independent_tasks": [
-                    {"drone": "follower_1", "waypoints": [{"north_m": 0, "east_m": 25, "altitude_m": 12, "speed_mps": 5}]},
-                    {"drone": "follower_2", "waypoints": [{"north_m": 0, "east_m": -25, "altitude_m": 12, "speed_mps": 5}]}
-                ]
-            })
-        }
-    ]
-    res_split = _call_llm_json(SWARM_PROMPT_TASK_SPLIT, f"Command: {cleaned_prompt}\nOperational Mode: {mode}", ex_split, ai_engine, model_name, client, gemini_client, is_local)
-    if res_split:
-        task_split = res_split
-    else:
-        task_split = {
-            "leader_task": cleaned_prompt,
-            "follower_task": f"Maintain wedge formation behind the leader.",
-            "formation": "wedge",
-            "spacing_m": 5,
-            "mode": mode,
-            "follower_1_offsets": [-5, -5],
-            "follower_2_offsets": [-5, 5],
-            "independent_tasks": None
-        }
-    logger.info(f"Swarm Stage 2 Result: formation={task_split.get('formation')}, spacing={task_split.get('spacing_m')}m")
-
-    # ── Call 3: Leader Mission JSON Generator ──
-    logger.info("Swarm Stage 3/4: Leader Mission JSON Generation...")
-    leader_task_prompt = task_split.get("leader_task") or cleaned_prompt
-    leader_mission = plan_mission(leader_task_prompt, mode="standard", ai_engine=ai_engine, api_key=api_key, num_drones=1)
-    logger.info(f"Swarm Stage 3 Result: Leader mission generated with {len(leader_mission.get('actions', []))} actions.")
-
-    # ── Call 4: Follower Config Generator ──
-    logger.info("Swarm Stage 4/4: Follower Config Generation...")
-    f_input = (
-        f"Leader Mission Summary: {json.dumps(leader_mission.get('actions', []))}\n"
-        f"Follower Task Instructions: {task_split.get('follower_task', '')}\n"
-        f"Requested Mode: {mode}\n"
-        f"Formation Shape: {task_split.get('formation', 'wedge')}\n"
-        f"Spacing (m): {task_split.get('spacing_m', 5)}"
+    # ── Stage 1: Classify Intent ──
+    logger.info("Swarm Stage 1/5: Classify Intent...")
+    res_classify = _call_llm_json(
+        SWARM_CLASSIFY_PROMPT.format(instruction=prompt), prompt, [],
+        ai_engine, model_name, client, gemini_client, is_local
     )
-    ex_fconfig = [
-        {
-            "user": "Leader Mission Summary: [{\"type\": \"takeoff\", \"params\": {\"altitude_m\": 12}}, {\"type\": \"goto\", \"params\": {\"north_m\": 40, \"east_m\": 10, \"altitude_m\": 12, \"speed_mps\": 5}}, {\"type\": \"land\", \"params\": {}}]\nFollower Task Instructions: Maintain wedge formation relative to the leader throughout the flight.\nRequested Mode: FORMATION\nFormation Shape: wedge\nSpacing (m): 5",
-            "assistant": json.dumps({
-                "behavior": "maintain_formation",
-                "formation": "wedge",
-                "spacing_m": 5,
-                "collision_radius_m": 1.0,
-                "altitude_separation_m": 1.0,
-                "follower_1": {
-                    "role": "wingman_left",
-                    "offset_north_m": -5,
-                    "offset_east_m": -5,
-                    "independent_actions": None
-                },
-                "follower_2": {
-                    "role": "wingman_right",
-                    "offset_north_m": -5,
-                    "offset_east_m": 5,
-                    "independent_actions": None
-                }
-            })
-        }
-    ]
-    res_fconfig = _call_llm_json(SWARM_PROMPT_FOLLOWER_CONFIG, f_input, ex_fconfig, ai_engine, model_name, client, gemini_client, is_local)
-    if res_fconfig:
-        follower_config = res_fconfig
+    if res_classify and isinstance(res_classify, dict):
+        mode = str(res_classify.get("mode", "FORMATION")).upper()
+        formation_type = str(res_classify.get("formation_type", "wedge")).lower()
+        num_agents = int(res_classify.get("num_agents", num_drones))
+        needs_task_split = bool(res_classify.get("needs_task_split", mode in ("INDEPENDENT", "MIXED")))
     else:
-        f1_off = task_split.get("follower_1_offsets", [-5, -5])
-        f2_off = task_split.get("follower_2_offsets", [-5, 5])
-        follower_config = {
-            "behavior": "maintain_formation" if mode == "FORMATION" else mode.lower(),
-            "formation": task_split.get("formation", "wedge"),
-            "spacing_m": task_split.get("spacing_m", 5),
+        mode, formation_type, num_agents, needs_task_split = "FORMATION", "wedge", num_drones, False
+    if mode not in ("FORMATION", "INDEPENDENT", "MIXED", "REGROUP"):
+        mode = "FORMATION"
+    stages["classify"] = {"mode": mode, "formation_type": formation_type, "num_agents": num_agents, "needs_task_split": needs_task_split}
+    logger.info(f"Stage 1 Result: mode={mode}, formation={formation_type}, num_agents={num_agents}, split={needs_task_split}")
+
+    # ── Stage 2: Leader Actions Generator ──
+    logger.info("Swarm Stage 2/5: Leader Actions Generator...")
+    res_leader = _call_llm_json(
+        SWARM_LEADER_ACTIONS_PROMPT.format(instruction=prompt), prompt, [],
+        ai_engine, model_name, client, gemini_client, is_local
+    )
+    if res_leader and isinstance(res_leader, list) and len(res_leader) > 0:
+        leader_actions = _expand_sweep_actions(res_leader)
+    elif res_leader and isinstance(res_leader, dict) and "actions" in res_leader:
+        leader_actions = _expand_sweep_actions(res_leader["actions"])
+    else:
+        std_res = plan_mission(prompt, mode="standard", ai_engine=ai_engine, api_key=api_key, num_drones=1)
+        leader_actions = std_res.get("actions", [{"type": "takeoff", "params": {"altitude_m": 15.0}}, {"type": "land", "params": {}}])
+    stages["leader_actions"] = leader_actions
+    logger.info(f"Stage 2 Result: Generated {len(leader_actions)} leader actions.")
+
+    # ── Stage 3: Formation Params (Conditional) ──
+    spacing_m, angle_deg = 5.0, 135.0
+    if mode in ("FORMATION", "MIXED", "REGROUP"):
+        logger.info("Swarm Stage 3/5: Extracting Formation Params...")
+        res_fparams = _call_llm_json(
+            SWARM_FORMATION_PARAMS_PROMPT.format(instruction=prompt), prompt, [],
+            ai_engine, model_name, client, gemini_client, is_local
+        )
+        if res_fparams and isinstance(res_fparams, dict):
+            spacing_m = float(res_fparams.get("spacing_m", 5.0))
+            angle_deg = float(res_fparams.get("angle_deg", 135.0 if formation_type == "wedge" else 90.0))
+        stages["formation_params"] = {"spacing_m": spacing_m, "angle_deg": angle_deg}
+        logger.info(f"Stage 3 Result: spacing={spacing_m}m, angle={angle_deg}deg")
+    else:
+        stages["formation_params"] = None
+
+    # ── Stage 4: Follower Waypoints (True INDEPENDENT Mode) ──
+    follower_waypoints_map = {}
+    if needs_task_split or mode in ("INDEPENDENT", "MIXED"):
+        logger.info("Swarm Stage 4/5: Generating Unique Follower Waypoints...")
+        res_fwaypoints = _call_llm_json(
+            SWARM_FOLLOWER_WAYPOINTS_PROMPT.format(instruction=prompt, leader_summary=json.dumps(leader_actions)),
+            prompt, [], ai_engine, model_name, client, gemini_client, is_local
+        )
+        if res_fwaypoints and isinstance(res_fwaypoints, dict):
+            for k, v_actions in res_fwaypoints.items():
+                if isinstance(v_actions, list) and len(v_actions) > 0:
+                    follower_waypoints_map[k] = _expand_sweep_actions(v_actions)
+        stages["follower_waypoints"] = follower_waypoints_map
+        logger.info(f"Stage 4 Result: Generated unique waypoints for {len(follower_waypoints_map)} followers.")
+    else:
+        stages["follower_waypoints"] = None
+
+    # ── Stage 5: Python Assembly & Pydantic Repair Loop ──
+    logger.info("Swarm Stage 5/5: Python Assembly & Pydantic Validation...")
+    constraints = load_user_constraints()
+
+    agents_list = []
+    agents_list.append({"id": "leader", "role": "leader", "udp": "udp://:14540"})
+    for i in range(1, num_agents):
+        fid = f"follower_{i}"
+        role_str = "wingman_left" if i % 2 != 0 else "wingman_right"
+        if mode == "INDEPENDENT":
+            role_str = "independent"
+        ind_actions = follower_waypoints_map.get(fid) if follower_waypoints_map else None
+        agents_list.append({
+            "id": fid,
+            "role": role_str,
+            "slot": i,
+            "udp": f"udp://:{14540 + i}",
+            "independent_actions": ind_actions
+        })
+
+    raw_mission = {
+        "mission_id": f"swarm_{int(time.time())}",
+        "mode": mode,
+        "formation": {"type": formation_type, "spacing_m": spacing_m, "angle_deg": angle_deg, "frame": "body_relative"} if mode in ("FORMATION", "MIXED", "REGROUP") else None,
+        "safety": {
             "collision_radius_m": 1.0,
+            "min_separation_m": max(3.0, spacing_m if mode in ("FORMATION", "MIXED", "REGROUP") else 3.0),
             "altitude_separation_m": 1.0,
-            "follower_1": {
-                "role": "wingman_left",
-                "offset_north_m": f1_off[0] if isinstance(f1_off, list) and len(f1_off) >= 2 else -5,
-                "offset_east_m": f1_off[1] if isinstance(f1_off, list) and len(f1_off) >= 2 else -5,
-                "independent_actions": task_split.get("independent_tasks")
-            },
-            "follower_2": {
-                "role": "wingman_right",
-                "offset_north_m": f2_off[0] if isinstance(f2_off, list) and len(f2_off) >= 2 else -5,
-                "offset_east_m": f2_off[1] if isinstance(f2_off, list) and len(f2_off) >= 2 else 5,
-                "independent_actions": task_split.get("independent_tasks")
-            }
+            "avoidance_gain": 0.6,
+            "max_correction_mps": 2.0
+        },
+        "agents": agents_list,
+        "leader_mission": {"actions": leader_actions},
+        "constraints": constraints.model_dump()
+    }
+
+    # Repair Loop (max 2 attempts)
+    max_repairs = 2
+    for attempt in range(max_repairs + 1):
+        try:
+            validated_mission = Mission.model_validate(raw_mission)
+            logger.info("Pydantic schema validation successful!")
+            break
+        except Exception as e:
+            err_msg = str(e)
+            logger.warning(f"Validation failure (Attempt {attempt + 1}/{max_repairs + 1}): {err_msg}")
+            if attempt == max_repairs:
+                logger.error("Max repair attempts reached. Returning best-effort raw mission structure.")
+                break
+            repair_prompt = SWARM_REPAIR_PROMPT.format(error=err_msg, previous_json=json.dumps(raw_mission))
+            res_repair = _call_llm_json(repair_prompt, prompt, [], ai_engine, model_name, client, gemini_client, is_local)
+            if res_repair and isinstance(res_repair, dict):
+                raw_mission.update(res_repair)
+                stages["repairs"].append({"attempt": attempt + 1, "error": err_msg, "fixed": res_repair})
+
+    follower_config_compat = {
+        "behavior": "maintain_formation" if mode == "FORMATION" else mode.lower(),
+        "formation": formation_type,
+        "spacing_m": spacing_m,
+        "collision_radius_m": raw_mission["safety"]["collision_radius_m"],
+        "altitude_separation_m": raw_mission["safety"]["altitude_separation_m"],
+    }
+    for ag in agents_list[1:]:
+        fid = ag["id"]
+        follower_config_compat[fid] = {
+            "role": ag["role"],
+            "independent_actions": ag.get("independent_actions")
         }
-    logger.info("Swarm Stage 4 Result: Follower config complete.")
+        if fid == "follower_1":
+            follower_config_compat["follower_1"]["offset_north_m"] = -spacing_m
+            follower_config_compat["follower_1"]["offset_east_m"] = -spacing_m
+        elif fid == "follower_2":
+            follower_config_compat["follower_2"]["offset_north_m"] = -spacing_m
+            follower_config_compat["follower_2"]["offset_east_m"] = spacing_m
 
     return {
-        "mission_name": leader_mission.get("mission_name", "Swarm Multi-Agent Mission"),
+        "mission_id": raw_mission["mission_id"],
+        "mission_name": f"Swarm Mission ({mode})",
         "vehicle_type": "swarm",
-        "drone_count": num_drones,
-        "formation": task_split.get("formation", "wedge").lower(),
-        "spacing_m": float(task_split.get("spacing_m", 5)),
-        "collision_radius_m": float(follower_config.get("collision_radius_m", 1.0)),
+        "drone_count": num_agents,
+        "formation": raw_mission["formation"],
+        "formation_type": formation_type,
+        "spacing_m": spacing_m,
+        "collision_radius_m": raw_mission["safety"]["collision_radius_m"],
         "mode": mode,
-        "leader_mission": leader_mission,
-        "follower_config": follower_config,
-        "actions": leader_mission.get("actions", []),
-        "llm_stages": {
-            "cleanup": {"cleaned_prompt": cleaned_prompt, "mode": mode},
-            "task_split": task_split,
-            "leader_json": leader_mission,
-            "follower_config": follower_config
-        }
+        "leader_mission": raw_mission["leader_mission"],
+        "follower_config": follower_config_compat,
+        "actions": raw_mission["leader_mission"]["actions"],
+        "agents": raw_mission["agents"],
+        "safety": raw_mission["safety"],
+        "constraints": raw_mission["constraints"],
+        "llm_stages": stages
     }
 

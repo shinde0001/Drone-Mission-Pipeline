@@ -236,7 +236,8 @@ async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, t
     print_info("Starting Real Swarm Execution...")
     audit.record("swarm_start", {"mission_name": mission.get("mission_name", "swarm_mission")})
     
-    formation_name = mission.get("formation", "wedge").lower()
+    formation_raw = mission.get("formation", "wedge")
+    formation_name = (formation_raw.get("type", "wedge") if isinstance(formation_raw, dict) else str(formation_raw)).lower()
     num_drones = int(mission.get("drone_count", mission.get("num_drones", 3)))
     mode = mission.get("mode", "FORMATION").upper()
     spacing_m = float(mission.get("spacing_m", 5.0))
@@ -269,155 +270,69 @@ async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, t
         audit.record("swarm_error", {"message": f"Connection error: {e}"})
         raise e
         
-    controller = None
     try:
-        actions = mission.get("actions", [])
-        if not actions and "leader_mission" in mission:
-            actions = mission["leader_mission"].get("actions", [])
-
-        # Step 1: Takeoff (all drones simultaneously)
-        takeoff_action = next((a for a in actions if a.get("type") == "takeoff"), None)
-        alt = takeoff_action["params"].get("altitude_m", 10.0) if takeoff_action else 10.0
-        
-        audit.record("swarm_takeoff", {"altitude_m": alt})
-        print_info("Arming all drones...")
-        await asyncio.gather(*(d.action.arm() for d in drones))
-        print_success("All drones armed.")
-        
-        await asyncio.gather(*(d.action.set_takeoff_altitude(alt) for d in drones))
-        await asyncio.gather(*(d.action.takeoff() for d in drones))
-        print_info("All drones taking off...")
-        
-        while True:
-            alts = []
-            for d in drones:
-                async for pos in d.telemetry.position():
-                    alts.append(pos.relative_altitude_m)
-                    break
-            if len(alts) == len(drones) and all(a >= alt * 0.90 for a in alts):
-                print_success("All drones reached takeoff altitude")
-                break
-            await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
-
-        # Step 2: Start FormationController for FORMATION and REGROUP modes
-        if mode in ("FORMATION", "REGROUP") and len(drones) > 1:
-            controller = FormationController(
-                leader_drone=drones[0],
-                wingmen=drones[1:],
-                offsets=wingmen_offsets,
-                collision_radius_m=collision_radius_m
+        from swarm_backend.config.schema import Mission as SwarmMission
+        try:
+            mission_obj = SwarmMission.model_validate(mission)
+        except Exception as e:
+            print_info(f"Adapting mission dict to Pydantic Mission model ({e})...")
+            from swarm_backend.config.schema import (
+                MissionMode, FormationConfig, SafetyConfig, AgentConfig, LeaderMission, Action as SchemaAction
             )
-            await controller.start()
-
-        # Step 3: Execute mode-specific navigation
-        if mode == "INDEPENDENT":
-            print_info("Executing INDEPENDENT mode tasks across swarm...")
-            # Run independent paths in parallel
-            async def run_drone_path(d: System, drone_actions: list, label: str):
-                for act in drone_actions:
-                    t = act.get("type")
-                    p = act.get("params", {})
-                    if t == "goto":
-                        n, e, a = p.get("north_m", 0.0), p.get("east_m", 0.0), p.get("altitude_m", alt)
-                        await d.offboard.set_position_ned(PositionNedYaw(n, e, -a, 0.0))
-                        try:
-                            await d.offboard.start()
-                        except OffboardError:
-                            pass
-                        while True:
-                            async for p_ned in d.telemetry.position_velocity_ned():
-                                curr_n = p_ned.position.north_m
-                                curr_e = p_ned.position.east_m
-                                if math.sqrt((curr_n - n)**2 + (curr_e - e)**2) <= WAYPOINT_TOLERANCE_M:
-                                    break
-                            await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
-                    elif t == "loiter":
-                        await asyncio.sleep(p.get("duration_s", 5))
-
+            mode_str = str(mission.get("mode", "FORMATION")).upper()
+            if mode_str not in ("FORMATION", "INDEPENDENT", "MIXED", "REGROUP"):
+                mode_str = "FORMATION"
+            
+            agents_list = [AgentConfig(id="leader", role="leader")]
             f_config = mission.get("follower_config", {})
-            f1_actions = f_config.get("follower_1", {}).get("independent_actions") or []
-            f2_actions = f_config.get("follower_2", {}).get("independent_actions") or []
+            for i in range(1, num_drones):
+                fid = f"follower_{i}"
+                fval = f_config.get(fid, {}) if isinstance(f_config, dict) else {}
+                role_str = fval.get("role", "wingman_left" if i % 2 != 0 else "wingman_right")
+                ind_acts = fval.get("independent_actions")
+                ind_act_objs = [SchemaAction(**a) if isinstance(a, dict) else a for a in ind_acts] if ind_acts else None
+                agents_list.append(AgentConfig(id=fid, role=role_str, slot=i, independent_actions=ind_act_objs))
 
-            await asyncio.gather(
-                run_drone_path(drones[0], [a for a in actions if a.get("type") not in ("takeoff", "land", "return_to_launch")], "Leader"),
-                run_drone_path(drones[1], f1_actions, "Follower 1") if len(drones) > 1 else asyncio.sleep(0),
-                run_drone_path(drones[2], f2_actions, "Follower 2") if len(drones) > 2 else asyncio.sleep(0)
+            actions_raw = mission.get("actions", [])
+            if not actions_raw and "leader_mission" in mission and isinstance(mission["leader_mission"], dict):
+                actions_raw = mission["leader_mission"].get("actions", [])
+            leader_acts = [SchemaAction(**a) if isinstance(a, dict) else a for a in actions_raw]
+
+            formation_cfg = FormationConfig(
+                type=formation_name,
+                spacing_m=spacing_m,
+                angle_deg=135.0 if formation_name == "wedge" else 90.0,
+                frame="body_relative"
+            ) if mode_str in ("FORMATION", "MIXED", "REGROUP") else None
+
+            mission_obj = SwarmMission(
+                mission_id=str(mission.get("mission_name", f"swarm_{num_drones}")),
+                mode=MissionMode(mode_str),
+                formation=formation_cfg,
+                safety=SafetyConfig(collision_radius_m=collision_radius_m, min_separation_m=max(3.0, spacing_m)),
+                agents=agents_list,
+                leader_mission=LeaderMission(actions=leader_acts)
             )
 
-        else:  # FORMATION or REGROUP
-            # Leader navigates waypoints sequentially while followers track via FormationController
-            for step_idx, action in enumerate(actions):
-                action_type = action.get("type")
-                params = action.get("params", {})
-                
-                if action_type in ("takeoff", "land", "return_to_launch"):
-                    continue
-                
-                print_info(f"Leader navigating step {step_idx + 1}/{len(actions)}: {action_type}")
-                
-                if action_type == "goto":
-                    leader_n = params.get("north_m", 0.0)
-                    leader_e = params.get("east_m", 0.0)
-                    leader_alt = params.get("altitude_m", 10.0)
-                    
-                    audit.record("swarm_goto", {"north_m": leader_n, "east_m": leader_e, "altitude_m": leader_alt})
-                    
-                    heading = math.degrees(math.atan2(leader_e, leader_n)) % 360
-                    await drones[0].offboard.set_position_ned(PositionNedYaw(leader_n, leader_e, -leader_alt, heading))
-                    try:
-                        await drones[0].offboard.start()
-                    except OffboardError:
-                        pass
-                        
-                    while True:
-                        async for pos_ned in drones[0].telemetry.position_velocity_ned():
-                            curr_n = pos_ned.position.north_m
-                            curr_e = pos_ned.position.east_m
-                            if math.sqrt((curr_n - leader_n)**2 + (curr_e - leader_e)**2) <= WAYPOINT_TOLERANCE_M:
-                                break
-                        await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
-                        
-                    print_success("Leader reached waypoint! Followers synchronized.")
-                    
-                elif action_type == "loiter":
-                    dur = params.get("duration_s", 5)
-                    print_info(f"Swarm loitering in formation for {dur}s...")
-                    await asyncio.sleep(dur)
+        # Map connected drones to vehicle_instances for SwarmOrchestrator
+        vehicle_instances = {"leader": drones[0]}
+        for i, wing in enumerate(drones[1:], start=1):
+            vehicle_instances[f"follower_{i}"] = wing
 
-        # Step 4: Stop Formation loops before landing
-        if controller:
-            await controller.stop()
+        from swarm_backend.core.orchestrator import SwarmOrchestrator
+        orchestrator = SwarmOrchestrator(mission_obj, vehicle_instances=vehicle_instances)
+        print_info("Initializing SwarmOrchestrator with connected vehicles...")
+        await orchestrator.initialize()
+        print_info("Running unified SwarmOrchestrator control loop...")
+        await orchestrator.run()
 
-        # Step 5: Land / RTL all drones simultaneously
-        last_action = actions[-1] if actions else {}
-        if last_action.get("type") == "return_to_launch":
-            audit.record("swarm_rtl")
-            print_info("Returning to launch for all drones...")
-            await asyncio.gather(*(d.action.return_to_launch() for d in drones))
-        else:
-            audit.record("swarm_land")
-            print_info("Landing all drones...")
-            await asyncio.gather(*(d.action.land() for d in drones))
-            
-        while True:
-            armed_states = []
-            for d in drones:
-                async for armed in d.telemetry.armed():
-                    armed_states.append(armed)
-                    break
-            if not any(armed_states):
-                print_success("All drones landed and disarmed.")
-                break
-            await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
-            
     except Exception as e:
-        if controller:
-            await controller.stop()
-        print_error(f"Swarm mission error: {e}")
+        print_error(f"Swarm mission execution error: {e}")
         audit.record("swarm_error", {"details": str(e)})
-        print_warning("Emergency landing swarm...")
-        await asyncio.gather(*(d.action.land() for d in drones if d))
+        print_warning("Initiating emergency landing for swarm...")
+        await asyncio.gather(*(d.action.land() for d in drones if d), return_exceptions=True)
         raise e
         
     audit.record("swarm_completed")
     print_success("Swarm Mission Completed Successfully!")
+

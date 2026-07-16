@@ -64,7 +64,7 @@ No AI-generated mission can bypass this module. Every JSON payload is processed 
 | Mode | Technology | Description |
 | :--- | :--- | :--- |
 | **Standard Single Drone** | MAVSDK Position Control | Evaluates, translates, and flies structured single-drone trajectories. |
-| **Multi-Agent Swarm** | 4-Stage LLM Chain + 10Hz `FormationController` | Synchronizes a fixed 3-drone squad (`Leader Alpha`, `Follower 1 Bravo`, `Follower 2 Charlie`) with dynamic heading-rotated formation tracking and 1.0m altitude-stacking collision avoidance across `FORMATION`, `INDEPENDENT`, and `REGROUP` modes. |
+| **Multi-Agent Swarm** | 5-Stage LLM Chain + 10Hz `SwarmOrchestrator` | Synchronizes up to 5 drones (`Leader`, `Follower 1..N`) with dynamic heading-rotated formation tracking and 1.0m altitude-stacking collision avoidance across `FORMATION`, `INDEPENDENT`, `MIXED`, and `REGROUP` modes. Operates a unified 5-stage AI planning pipeline (`Classify Intent` → `Leader Actions` → `Formation Params` → `Follower Waypoints` → `Pydantic Repair Loop`). |
 
 ---
 
@@ -80,21 +80,30 @@ drone_pipeline/
 ├── run_mission.py                 # CLI entrypoint for mission execution
 │
 ├── config/
-│   ├── mission_schema.json        # JSON schema defining valid mission formats
 │   ├── safety_limits.yaml         # Configurable threshold values (geofence, speed, alt)
 │   └── waypoint_library.yaml      # Static route libraries and waypoint presets
 │
 ├── src/
-│   ├── llm_planner.py             # 4-stage sequential LLM planner (Intent, Task Split, Leader, Follower)
+│   ├── llm_planner.py             # Unified 5-stage sequential LLM planner (Intent, Leader, Formation, Follower, Repair)
 │   ├── mission_validator.py       # Enforces schema validation and swarm safety guardrails
 │   ├── executor.py                # Translates mission JSON -> MAVSDK single-drone commands
 │   ├── executors/
-│   │   └── swarm_executor.py      # 10Hz FormationController with dynamic heading rotation & collision avoidance
+│   │   └── swarm_executor.py      # Entrypoint mapping Swarm missions to SwarmOrchestrator
 │   └── utils.py                   # Parsing helpers, configurations, and audit loggers
 │
+├── swarm_backend/
+│   ├── config/
+│   │   └── schema.py              # Definitive Pydantic schemas (Mission, FormationConfig, DroneAgent)
+│   ├── core/
+│   │   ├── orchestrator.py        # SwarmOrchestrator managing concurrent multi-drone execution loops
+│   │   ├── formation.py           # 10Hz geometric formation tracking and offset computation
+│   │   ├── collision.py           # Safety guardrails and inter-agent distance checking
+│   │   └── swarm_state.py         # Thread-safe in-memory telemetry state bus
+│   └── tests/                     # Automated test suite (E2E pipeline, orchestrator, collision, schema)
+│
 └── web_dashboard/
-    ├── app.py                     # FastAPI web server, process auto-cleanup, and Ollama auto-installer
-    ├── index.html                 # UI cockpit with multi-stage LLM tab breakdown and 3-drone map canvas
+    ├── app.py                     # FastAPI web server, multi-drone websocket telemetry relayer, process auto-cleanup
+    ├── index.html                 # UI cockpit with 5-stage LLM tab breakdown and dynamic multi-drone map canvas
     └── style.css                  # Modern dark-mode UI styles
 ```
 
@@ -162,3 +171,13 @@ python3 run_mission.py --prompt "Takeoff 25m, fly east 30m, and land" --dry-run
 * **Geofence Enforcement**: If any coordinate in a mission falls outside the radial/altitude geofence defined in `safety_limits.yaml`, the validator blocks execution and reports the violating coordinates.
 * **Active Manual Override**: Telemetry panel includes a hardware interrupt emulator. Pressing **HOLD**, **RTL**, or **LAND** immediately terminates offboard control and hands authority back to native autopilot modes.
 * **Signal Loss Recovery**: If the network connection between the controller and PX4 drops, the autopilot triggers its native PX4 Failsafe (RTL or Land based on configurations).
+
+---
+
+## 🧪 Testing & Verification
+
+The project includes an exhaustive automated unit and integration test suite covering the full multi-agent swarm architecture:
+```bash
+# Run all tests (Schema, Parser, Formation Math, Safety Envelope, Collision Avoidance, Orchestrator, E2E Pipeline)
+python3 -m pytest -p no:anyio swarm_backend/tests/
+```

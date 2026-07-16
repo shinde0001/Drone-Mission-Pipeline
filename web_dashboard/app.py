@@ -44,7 +44,8 @@ app.add_middleware(
 
 # ── State ──
 pipeline_state = {
-    "status": "idle",  # idle, planning, validating, executing, error
+    "status": "idle",
+    "manual_formation": "wedge",  # idle, planning, validating, executing, error
     "last_mission": None,
     "last_validation": None,
     "execution_log": [],
@@ -76,6 +77,7 @@ pipeline_state = {
 
 # Shared drone system instance
 shared_drone = System()
+swarm_drones = {}
 
 # Shared telemetry state for executor
 shared_telemetry_state = {
@@ -159,6 +161,7 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                     break
             
             pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = True
+            swarm_drones[drone_idx] = drone
             
             # Leader (index 0) updates the main telemetry dict for backwards compatibility
             if drone_idx == 0:
@@ -617,16 +620,39 @@ async def terminate_mission():
     return {"success": True, "message": "Mission terminated successfully"}
 
 
+
+@app.post("/api/action/formation")
+async def action_formation(body: dict):
+    '''Set manual formation.'''
+    formation = body.get("formation", "wedge")
+    pipeline_state["manual_formation"] = formation
+    pipeline_state["execution_log"].append({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "elapsed_s": 0.0,
+        "action": "set formation",
+        "status": "success",
+        "details": {"message": f"Manual formation set to {formation}"},
+    })
+    return {"success": True}
+
 @app.post("/api/action/hold")
 async def action_hold():
     """Live hold command."""
     global active_mission_task
-    if active_mission_task and not active_mission_task.done():
-        active_mission_task.cancel()
+    if 'hold' in ('hold', 'rtl'):
+        if active_mission_task and not active_mission_task.done():
+            active_mission_task.cancel()
     
     try:
-        await shared_drone.action.hold()
-        pipeline_state["status"] = "holding"
+        if pipeline_state.get("num_drones", 1) > 1 and len(swarm_drones) > 1:
+            tasks = [d.action.hold() for d in swarm_drones.values() if d]
+            await asyncio.gather(*tasks)
+        else:
+            await shared_drone.action.hold()
+            
+        if 'hold' in ('hold', 'rtl'):
+            pipeline_state["status"] = 'holding' if 'hold' == 'hold' else 'returning'
+            
         pipeline_state["execution_log"].append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": 0.0,
@@ -640,14 +666,22 @@ async def action_hold():
 
 @app.post("/api/action/rtl")
 async def action_rtl():
-    """Live Return to Launch command."""
+    """Live rtl command."""
     global active_mission_task
-    if active_mission_task and not active_mission_task.done():
-        active_mission_task.cancel()
+    if 'rtl' in ('hold', 'rtl'):
+        if active_mission_task and not active_mission_task.done():
+            active_mission_task.cancel()
     
     try:
-        await shared_drone.action.return_to_launch()
-        pipeline_state["status"] = "returning"
+        if pipeline_state.get("num_drones", 1) > 1 and len(swarm_drones) > 1:
+            tasks = [d.action.return_to_launch() for d in swarm_drones.values() if d]
+            await asyncio.gather(*tasks)
+        else:
+            await shared_drone.action.return_to_launch()
+            
+        if 'rtl' in ('hold', 'rtl'):
+            pipeline_state["status"] = 'rtling' if 'rtl' == 'hold' else 'returning'
+            
         pipeline_state["execution_log"].append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": 0.0,
@@ -662,8 +696,21 @@ async def action_rtl():
 @app.post("/api/action/arm")
 async def action_arm():
     """Live arm command."""
+    global active_mission_task
+    if 'arm' in ('hold', 'rtl'):
+        if active_mission_task and not active_mission_task.done():
+            active_mission_task.cancel()
+    
     try:
-        await shared_drone.action.arm()
+        if pipeline_state.get("num_drones", 1) > 1 and len(swarm_drones) > 1:
+            tasks = [d.action.arm() for d in swarm_drones.values() if d]
+            await asyncio.gather(*tasks)
+        else:
+            await shared_drone.action.arm()
+            
+        if 'arm' in ('hold', 'rtl'):
+            pipeline_state["status"] = 'arming' if 'arm' == 'hold' else 'returning'
+            
         pipeline_state["execution_log"].append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": 0.0,
@@ -678,8 +725,21 @@ async def action_arm():
 @app.post("/api/action/disarm")
 async def action_disarm():
     """Live disarm command."""
+    global active_mission_task
+    if 'disarm' in ('hold', 'rtl'):
+        if active_mission_task and not active_mission_task.done():
+            active_mission_task.cancel()
+    
     try:
-        await shared_drone.action.disarm()
+        if pipeline_state.get("num_drones", 1) > 1 and len(swarm_drones) > 1:
+            tasks = [d.action.disarm() for d in swarm_drones.values() if d]
+            await asyncio.gather(*tasks)
+        else:
+            await shared_drone.action.disarm()
+            
+        if 'disarm' in ('hold', 'rtl'):
+            pipeline_state["status"] = 'disarming' if 'disarm' == 'hold' else 'returning'
+            
         pipeline_state["execution_log"].append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": 0.0,
@@ -693,7 +753,7 @@ async def action_disarm():
 
 @app.post("/api/action/move")
 async def action_move(body: dict):
-    """Move drone in a specific direction."""
+    '''Move drone in a specific direction.'''
     import math
     direction = body.get("direction")
     distance = body.get("distance", 5.0)
@@ -736,7 +796,36 @@ async def action_move(body: dict):
     new_alt = alt + d_alt
     
     try:
-        await shared_drone.action.goto_location(new_lat, new_lon, new_alt, heading)
+        tasks = []
+        num_drones = pipeline_state.get("num_drones", 1)
+        if num_drones > 1 and len(swarm_drones) > 1:
+            formation = pipeline_state.get("manual_formation", "wedge")
+            offsets = {
+                "wedge": [(-5.0, -5.0, 0.0), (-5.0, 5.0, 0.0)],
+                "line": [(0.0, -5.0, 0.0), (0.0, 5.0, 0.0)],
+                "column": [(-5.0, 0.0, 0.0), (-10.0, 0.0, 0.0)]
+            }.get(formation, [(-5.0, -5.0, 0.0), (-5.0, 5.0, 0.0)])
+            
+            if 0 in swarm_drones:
+                tasks.append(swarm_drones[0].action.goto_location(new_lat, new_lon, new_alt, heading))
+                
+            for i in range(1, num_drones):
+                if i in swarm_drones:
+                    dx, dy, dz = offsets[i - 1] if i - 1 < len(offsets) else (0, 0, 0)
+                    cos_h = math.cos(math.radians(heading))
+                    sin_h = math.sin(math.radians(heading))
+                    rotated_n = dx * cos_h - dy * sin_h
+                    rotated_e = dx * sin_h + dy * cos_h
+                    
+                    d_lat_f = rotated_n / 111111.0
+                    d_lon_f = rotated_e / (111111.0 * math.cos(math.radians(lat)))
+                    
+                    tasks.append(swarm_drones[i].action.goto_location(new_lat + d_lat_f, new_lon + d_lon_f, new_alt - dz, heading))
+                    
+            await asyncio.gather(*tasks)
+        else:
+            await shared_drone.action.goto_location(new_lat, new_lon, new_alt, heading)
+            
         pipeline_state["execution_log"].append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": 0.0,
