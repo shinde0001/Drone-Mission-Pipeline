@@ -138,6 +138,14 @@ async def monitor_speed(drone):
 async def monitor_battery(drone):
     try:
         async for battery in drone.telemetry.battery():
+            update_telemetry_timestamp()
+            pct = battery.remaining_percent
+            if pct <= 1.0:
+                pct *= 100
+            pipeline_state["telemetry"]["battery_pct"] = pct
+    except Exception as e:
+        print(f"Error monitoring battery: {e}")
+
 async def monitor_single_drone_task(drone_idx=0, port=14540):
     import random
     
