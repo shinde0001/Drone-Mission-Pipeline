@@ -2078,43 +2078,43 @@
                     
                     if (tel.drones && tel.drones.length > 0) {
                         tel.drones.forEach((drone, idx) => {
+                            const isDConnected = !!drone.connected;
                             const altEl = document.getElementById(`telAlt_${idx}`);
-                            if (altEl) altEl.textContent = drone.altitude_m?.toFixed(1) || '--';
+                            if (altEl) altEl.textContent = isDConnected && drone.altitude_m !== undefined ? drone.altitude_m.toFixed(1) : '--';
                             const speedEl = document.getElementById(`telSpeed_${idx}`);
-                            if (speedEl) speedEl.textContent = drone.speed_mps?.toFixed(1) || '--';
+                            if (speedEl) speedEl.textContent = isDConnected && drone.speed_mps !== undefined ? drone.speed_mps.toFixed(1) : '--';
                             const headEl = document.getElementById(`telHeading_${idx}`);
-                            if (headEl) headEl.textContent = drone.heading_deg?.toFixed(0) || '--';
+                            if (headEl) headEl.textContent = isDConnected && drone.heading_deg !== undefined ? drone.heading_deg.toFixed(0) : '--';
                             const latEl = document.getElementById(`telLat_${idx}`);
-                            if (latEl) latEl.textContent = drone.latitude?.toFixed(6) || '--';
+                            if (latEl) latEl.textContent = isDConnected && drone.latitude !== undefined ? drone.latitude.toFixed(6) : '--';
                             const lonEl = document.getElementById(`telLon_${idx}`);
-                            if (lonEl) lonEl.textContent = drone.longitude?.toFixed(6) || '--';
+                            if (lonEl) lonEl.textContent = isDConnected && drone.longitude !== undefined ? drone.longitude.toFixed(6) : '--';
                             const batEl = document.getElementById(`telBat_${idx}`);
-                            if (batEl) batEl.textContent = drone.battery_pct?.toFixed(0) || '--';
+                            if (batEl) batEl.textContent = isDConnected && drone.battery_pct !== undefined ? drone.battery_pct.toFixed(0) : '--';
                             
                             const connEl = document.getElementById(`telConn_${idx}`);
                             if (connEl) {
-                                const isDConnected = !!drone.connected;
                                 connEl.textContent = isDConnected ? 'Connected' : 'Disconnected';
                                 connEl.className = `card-badge ${isDConnected ? 'badge-success' : 'badge-error'}`;
                             }
                         });
                     } else {
+                        const isConnected = !!tel.connected;
                         const altEl = document.getElementById('telAlt_0');
-                        if (altEl) altEl.textContent = tel.altitude_m?.toFixed(1) || '--';
+                        if (altEl) altEl.textContent = isConnected && tel.altitude_m !== undefined ? tel.altitude_m.toFixed(1) : '--';
                         const speedEl = document.getElementById('telSpeed_0');
-                        if (speedEl) speedEl.textContent = tel.speed_mps?.toFixed(1) || '--';
+                        if (speedEl) speedEl.textContent = isConnected && tel.speed_mps !== undefined ? tel.speed_mps.toFixed(1) : '--';
                         const headEl = document.getElementById('telHeading_0');
-                        if (headEl) headEl.textContent = tel.heading_deg?.toFixed(0) || '--';
+                        if (headEl) headEl.textContent = isConnected && tel.heading_deg !== undefined ? tel.heading_deg.toFixed(0) : '--';
                         const latEl = document.getElementById('telLat_0');
-                        if (latEl) latEl.textContent = tel.latitude?.toFixed(6) || '--';
+                        if (latEl) latEl.textContent = isConnected && tel.latitude !== undefined ? tel.latitude.toFixed(6) : '--';
                         const lonEl = document.getElementById('telLon_0');
-                        if (lonEl) lonEl.textContent = tel.longitude?.toFixed(6) || '--';
+                        if (lonEl) lonEl.textContent = isConnected && tel.longitude !== undefined ? tel.longitude.toFixed(6) : '--';
                         const batEl = document.getElementById('telBat_0');
-                        if (batEl) batEl.textContent = tel.battery_pct?.toFixed(0) || '--';
+                        if (batEl) batEl.textContent = isConnected && tel.battery_pct !== undefined ? tel.battery_pct.toFixed(0) : '--';
                         
                         const connEl = document.getElementById('telConn_0');
                         if (connEl) {
-                            const isConnected = !!tel.connected;
                             connEl.textContent = isConnected ? 'Connected' : 'Disconnected';
                             connEl.className = `card-badge ${isConnected ? 'badge-success' : 'badge-error'}`;
                         }
