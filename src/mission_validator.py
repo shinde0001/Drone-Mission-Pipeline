@@ -412,3 +412,56 @@ def validate_mission(mission: dict) -> ValidationResult:
         )
 
     return result
+
+def validate_hardware_safety(mission: dict, telemetry: dict) -> ValidationResult:
+    """
+    Hardware-specific safety validation layer.
+    Ensures the physical drone meets professional safety constraints before flight.
+    """
+    result = ValidationResult()
+    limits = load_safety_limits()
+    
+    # 1. Battery Check
+    bat = telemetry.get("battery_pct", 0)
+    if bat < 30:
+        result.add_error(f"Hardware Safety Violation: Battery is dangerously low ({bat}%). Minimum required is 30%.")
+    elif bat < 45:
+        result.add_warning(f"Hardware Safety: Battery is getting low ({bat}%).")
+
+    # 2. GPS Fix Check
+    # For this simplified dashboard telemetry we might not have exact satellite counts yet,
+    # but we will check if telemetry implies a GPS lock or if the flight controller reported armable
+    # In MAVSDK we wait for global position OK, here we warn if latitude/longitude are strictly 0.0
+    lat = telemetry.get("latitude", 0.0)
+    lon = telemetry.get("longitude", 0.0)
+    if abs(lat) < 0.0001 and abs(lon) < 0.0001:
+         result.add_error("Hardware Safety Violation: No valid GPS position detected.")
+
+    # 3. Hardware Altitude Cap (typically stricter than sim)
+    hw_max_alt = limits.get("hw_max_altitude_m", 30.0)
+    
+    actions = []
+    if "actions" in mission:
+        actions = mission.get("actions", [])
+    elif "leader_mission" in mission and isinstance(mission["leader_mission"], dict):
+        actions = mission["leader_mission"].get("actions", [])
+
+    rtl_present = False
+    for i, action in enumerate(actions):
+        if not isinstance(action, dict): continue
+        if action.get("type") in ("return_to_launch", "rtl"):
+            rtl_present = True
+            
+        params = action.get("params", {})
+        alt = params.get("altitude_m")
+        if alt is not None and alt > hw_max_alt:
+             result.add_error(f"Hardware Safety Violation: Action {i} requests altitude {alt}m which exceeds hardware cap of {hw_max_alt}m.")
+             
+        speed = params.get("speed_mps")
+        if speed is not None and speed > 8.0:
+             result.add_warning(f"Hardware Safety Advisory: Action {i} requests speed {speed}m/s. Ensure wind conditions permit this velocity safely.")
+             
+    if not rtl_present:
+        result.add_warning("Hardware Safety Advisory: Mission does not explicitly end with a return-to-launch (RTL) command.")
+
+    return result

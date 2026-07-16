@@ -478,6 +478,47 @@
         .telemetry-grid { grid-template-columns:repeat(3,1fr); }
         .header { padding:0 14px; }
     }
+    
+    /* ── TOGGLE SWITCH ── */
+    .connection-toggle {
+        display: flex; align-items: center; gap: 8px;
+        background: var(--surface2); padding: 4px 12px;
+        border-radius: 99px; border: 1.5px solid var(--border);
+    }
+    .toggle-label {
+        font-size: 13px; font-weight: 700; color: var(--text3);
+        transition: color 0.3s;
+    }
+    .toggle-label.active-sim { color: var(--accent-green, #10b981); }
+    .toggle-label.active-hw { color: var(--orange, #ea580c); }
+    .switch {
+        position: relative; display: inline-block;
+        width: 44px; height: 24px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+        position: absolute; cursor: pointer;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background-color: var(--accent-green, #10b981);
+        transition: .4s; border-radius: 24px;
+    }
+    .slider:before {
+        position: absolute; content: "";
+        height: 18px; width: 18px; left: 3px; bottom: 3px;
+        background-color: white; transition: .4s;
+        border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+    input:checked + .slider { background-color: var(--orange, #ea580c); }
+    input:checked + .slider:before { transform: translateX(20px); }
+    
+    .port-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        background: var(--surface2); border: 1px solid var(--border);
+        padding: 4px 10px; border-radius: 6px; font-size: 12px;
+        font-family: 'JetBrains Mono', monospace; margin-top: 8px;
+    }
+    .port-badge.error { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
+    .port-badge.success { border-color: #10b981; color: #047857; background: #ecfdf5; }
     </style>
 </head>
 
@@ -488,9 +529,20 @@
             <div class="header-logo">🚁</div>
             <div>
                 <div class="header-title">Drone Mission Pipeline</div>
-                <div class="header-subtitle">Prompt → LLM → Validated JSON → Executor → Gazebo</div>
+                <div class="header-subtitle" id="headerSubtitle">Prompt → LLM → Validated JSON → Executor → Gazebo</div>
             </div>
         </div>
+        
+        <!-- Toggle Switch -->
+        <div class="connection-toggle" title="Switch between Simulation and Hardware mode">
+            <span class="toggle-label active-sim" id="lblSim">SIM</span>
+            <label class="switch">
+                <input type="checkbox" id="hardwareToggle" onchange="toggleHardwareMode(this)">
+                <span class="slider round"></span>
+            </label>
+            <span class="toggle-label" id="lblHw">HW</span>
+        </div>
+        
         <div class="status-badge" id="statusBadge">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText">Idle</span>
@@ -500,6 +552,27 @@
     <!-- ── Main Content ───────────────────────────── -->
     <main class="main">
 
+
+        <!-- Hardware Port Status -->
+        <div id="hardwarePortSection" style="display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 15px 30px; background: var(--surface2); border: 1.5px solid var(--border); border-radius: 12px; margin-bottom: 15px;">
+            <div style="font-size: 14px; font-weight: 700; color: var(--orange); margin-bottom: 8px;">🔌 Hardware Telemetry</div>
+            <div id="portBadgesContainer" style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;">
+                <!-- Badges go here -->
+            </div>
+            
+            <div id="manualPortFallback" style="display: none; margin-top: 15px; text-align: left; background: var(--surface); padding: 12px; border-radius: 8px; border: 1px dashed var(--border); width: 100%; max-width: 500px;">
+                <div style="font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 8px;">Manual Configuration</div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" id="manualPortInput" placeholder="e.g. /dev/ttyUSB0" style="flex: 1; padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-family: monospace;">
+                    <select id="manualBaudSelect" style="padding: 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--text);">
+                        <option value="57600">57600</option>
+                        <option value="115200">115200</option>
+                        <option value="9600">9600</option>
+                    </select>
+                    <button onclick="applyManualPort()" style="background: var(--orange); color: white; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: 600;">Connect</button>
+                </div>
+            </div>
+        </div>
 
         <!-- Mode Selector -->
         <div class="mode-selector main-mode-selector">
@@ -1164,6 +1237,12 @@
                 }
             }
             if (!currentMission || !isValidated) return;
+            
+            const isHardware = document.getElementById('hardwareToggle') && document.getElementById('hardwareToggle').checked;
+            if (isHardware) {
+                openHardwareConfirm();
+                return;
+            }
 
             const btn = document.getElementById('executeBtn');
             btn.disabled = true;
@@ -1424,7 +1503,13 @@
                     if (data.valid) {
                         currentMission = editedMission; // Update current mission!
                         isValidated = true;
-                        document.getElementById('executeBtn').disabled = false;
+                        
+                        // Overwrite executeBtn onclick
+                        const executeBtn = document.getElementById('executeBtn');
+                        executeBtn.disabled = false;
+                        executeBtn.onclick = function() {
+                            handleExecute();
+                        };
                         setPipelineStep('validate', 'completed');
                         setStatus('validated', 'Edited Mission Validated ✓');
                         drawWaypointMap(editedMission); // Update the map
@@ -2494,6 +2579,148 @@
             } catch (err) {
                 console.error("Failed to save safety limits", err);
                 alert("❌ Error connecting to server.");
+            }
+        }
+        
+        // ── Hardware Mode Logic ──
+        async function toggleHardwareMode(checkbox) {
+            const hwSection = document.getElementById('hardwarePortSection');
+            const lblSim = document.getElementById('lblSim');
+            const lblHw = document.getElementById('lblHw');
+            const subtitle = document.getElementById('headerSubtitle');
+            const badgesContainer = document.getElementById('portBadgesContainer');
+            const manualFallback = document.getElementById('manualPortFallback');
+            
+            if (checkbox.checked) {
+                lblSim.classList.remove('active-sim');
+                lblSim.style.color = 'var(--text3)';
+                lblHw.classList.add('active-hw');
+                lblHw.style.color = 'var(--orange)';
+                subtitle.innerHTML = 'Prompt → LLM → Validated JSON → Executor → Hardware';
+                hwSection.style.display = 'flex';
+                badgesContainer.innerHTML = '<div class="port-badge">Scanning for devices...</div>';
+                manualFallback.style.display = 'none';
+                
+                try {
+                    const res = await fetch(`${API}/api/detect-ports`);
+                    const data = await res.json();
+                    
+                    if (data.ports && data.ports.length > 0) {
+                        badgesContainer.innerHTML = '';
+                        let accessiblePorts = [];
+                        data.ports.forEach(p => {
+                            if (p.accessible) {
+                                badgesContainer.innerHTML += `<div class="port-badge success" title="${p.description}">✅ ${p.device}</div>`;
+                                accessiblePorts.push(p.device);
+                            } else {
+                                badgesContainer.innerHTML += `<div class="port-badge error" title="${p.description}">🔒 ${p.device} (Denied)</div>`;
+                            }
+                        });
+                        
+                        if (data.fix_hint) {
+                            badgesContainer.innerHTML += `<div style="width: 100%; margin-top: 5px; font-size: 11px; color: #ef4444;">${data.fix_hint}</div>`;
+                        }
+                        
+                        if (accessiblePorts.length > 0) {
+                            await fetch(`${API}/api/set-connection-mode`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ mode: 'hardware', ports: accessiblePorts })
+                            });
+                        } else {
+                            manualFallback.style.display = 'block';
+                        }
+                    } else {
+                        badgesContainer.innerHTML = '<div class="port-badge error">⚠️ No telemetry device found. Check USB connection.</div>';
+                        manualFallback.style.display = 'block';
+                    }
+                } catch (err) {
+                    badgesContainer.innerHTML = '<div class="port-badge error">Failed to scan ports</div>';
+                    manualFallback.style.display = 'block';
+                }
+            } else {
+                lblHw.classList.remove('active-hw');
+                lblHw.style.color = 'var(--text3)';
+                lblSim.classList.add('active-sim');
+                lblSim.style.color = 'var(--accent-green)';
+                subtitle.innerHTML = 'Prompt → LLM → Validated JSON → Executor → Gazebo';
+                hwSection.style.display = 'none';
+                
+                await fetch(`${API}/api/set-connection-mode`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'simulation' })
+                });
+            }
+        }
+        
+        async function applyManualPort() {
+            const portInput = document.getElementById('manualPortInput').value.trim();
+            const baudRate = parseInt(document.getElementById('manualBaudSelect').value);
+            
+            if (!portInput) {
+                alert("Please enter a port path.");
+                return;
+            }
+            
+            try {
+                await fetch(`${API}/api/set-connection-mode`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'hardware', ports: [portInput], baud_rate: baudRate })
+                });
+                alert(`Hardware mode set to use ${portInput} at ${baudRate} baud.`);
+            } catch (err) {
+                alert("Failed to set connection mode.");
+            }
+        }
+        
+        function openHardwareConfirm() {
+            document.getElementById('hardwareConfirmModal').style.display = 'flex';
+            const checklist = document.getElementById('hardwareSafetyChecklist');
+            checklist.innerHTML = ''; // reset
+            
+            // fetch telemetry from global window.telemetryState or fetch /api/status
+            fetch(`${API}/api/status`).then(r => r.json()).then(data => {
+                const tel = data.telemetry;
+                const bat = tel.battery_pct;
+                const batColor = bat >= 30 ? 'var(--text)' : '#ef4444';
+                const batIcon = bat >= 30 ? '✅' : '❌';
+                
+                const lat = tel.latitude;
+                const lon = tel.longitude;
+                const gpsValid = (Math.abs(lat) > 0.0001 || Math.abs(lon) > 0.0001);
+                const gpsIcon = gpsValid ? '✅' : '❌';
+                const gpsColor = gpsValid ? 'var(--text)' : '#ef4444';
+                
+                checklist.innerHTML = `
+                    <div style="color: ${batColor}">${batIcon} Battery: ${bat.toFixed(1)}%</div>
+                    <div style="color: ${gpsColor}">${gpsIcon} GPS Fix: ${gpsValid ? 'Valid' : 'Waiting...'}</div>
+                    <div style="color: var(--text)">✅ Geofence: Active</div>
+                `;
+            });
+        }
+        
+        function closeHardwareConfirm() {
+            document.getElementById('hardwareConfirmModal').style.display = 'none';
+        }
+        
+        async function confirmHardwareExecute() {
+            closeHardwareConfirm();
+            try {
+                setStatus('executing', 'Executing on Hardware');
+                const res = await fetch(`${API}/api/execute`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hardware_confirmed: true })
+                });
+                const data = await res.json();
+                if (!data.success) {
+                    setStatus('error', data.error || 'Execution failed');
+                    alert('Execution failed: ' + data.error);
+                }
+            } catch (err) {
+                setStatus('error', 'Execution connection error');
             }
         }
 

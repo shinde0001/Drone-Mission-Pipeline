@@ -24,7 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.llm_planner import plan_mission
-from src.mission_validator import validate_mission
+from src.mission_validator import validate_mission, validate_hardware_safety
 from src.utils import load_waypoint_library, AuditLog, load_safety_limits
 from mavsdk import System
 
@@ -73,6 +73,9 @@ pipeline_state = {
         ]
     },
     "last_telemetry_update": datetime.now(timezone.utc),
+    "connection_mode": "simulation",
+    "hardware_ports": [],
+    "baud_rate": 57600
 }
 
 # Shared drone system instance
@@ -146,7 +149,8 @@ async def monitor_battery(drone):
 async def monitor_single_drone_task(drone_idx: int, port: int):
     while True:
         try:
-            if not is_simulator_running():
+            is_hw = pipeline_state.get("connection_mode") == "hardware"
+            if not is_hw and not is_simulator_running():
                 pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
                 if drone_idx == 0:
                     pipeline_state["telemetry"]["connected"] = False
@@ -154,11 +158,51 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                 continue
 
             drone = System(port=50051 + drone_idx)
-            await drone.connect(system_address=f"udp://:{port}")
-            # wait for connection
-            async for state in drone.core.connection_state():
-                if state.is_connected:
-                    break
+            
+            connected = False
+            if is_hw:
+                ports = pipeline_state.get("hardware_ports", [])
+                if drone_idx < len(ports):
+                    port_path = ports[drone_idx]
+                    baud_rate = pipeline_state.get("baud_rate", 57600)
+                    
+                    # Smart baud negotiation
+                    attempts = [(baud_rate, 3), (baud_rate, 3), (baud_rate, 3), (115200, 1), (9600, 1)]
+                    for b_rate, max_tries in attempts:
+                        try:
+                            await drone.connect(system_address=f"serial://{port_path}:{b_rate}")
+                            # wait up to 3s for connection
+                            for _ in range(6):
+                                async for state in drone.core.connection_state():
+                                    if state.is_connected:
+                                        connected = True
+                                        break
+                                    break # Only check one item from async generator then sleep
+                                if connected: break
+                                await asyncio.sleep(0.5)
+                        except Exception:
+                            pass
+                        
+                        if connected:
+                            print(f"Hardware drone {drone_idx} connected on {port_path} at {b_rate} baud")
+                            pipeline_state["baud_rate"] = b_rate # Save successful baud rate
+                            break
+                            
+                if not connected:
+                    # Connection failed or no port assigned
+                    pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
+                    if drone_idx == 0:
+                        pipeline_state["telemetry"]["connected"] = False
+                    await asyncio.sleep(2)
+                    continue
+                    
+            else:
+                await drone.connect(system_address=f"udp://:{port}")
+                # wait for connection
+                async for state in drone.core.connection_state():
+                    if state.is_connected:
+                        connected = True
+                        break
             
             pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = True
             swarm_drones[drone_idx] = drone
@@ -377,6 +421,49 @@ async def update_safety(body: dict):
     return {"success": True, "limits": current_limits}
 
 
+@app.get("/api/detect-ports")
+async def detect_ports():
+    """Scan and return available serial ports for telemetry."""
+    import serial.tools.list_ports
+    ports = []
+    
+    # Typically telemetry radios or pixhawks show up as ttyUSB or ttyACM
+    for p in serial.tools.list_ports.comports():
+        device = p.device
+        desc = p.description
+        if "ttyUSB" in device or "ttyACM" in device or "COM" in device:
+            accessible = os.access(device, os.R_OK | os.W_OK)
+            port_info = {
+                "device": device,
+                "description": desc,
+                "accessible": accessible
+            }
+            if not accessible and os.name == 'posix':
+                port_info["error"] = "permission_denied"
+            ports.append(port_info)
+            
+    return {
+        "ports": ports,
+        "fix_hint": f"Run: sudo usermod -aG dialout {os.environ.get('USER', '$USER')}" if any(p.get("error") == "permission_denied" for p in ports) else ""
+    }
+
+@app.post("/api/set-connection-mode")
+async def set_connection_mode(body: dict):
+    """Switch between simulation and hardware connection mode."""
+    mode = body.get("mode", "simulation")
+    ports = body.get("ports", [])
+    baud_rate = body.get("baud_rate", 57600)
+    
+    pipeline_state["connection_mode"] = mode
+    if mode == "hardware":
+        pipeline_state["hardware_ports"] = ports
+        pipeline_state["baud_rate"] = baud_rate
+    else:
+        pipeline_state["hardware_ports"] = []
+        
+    return {"success": True, "mode": mode}
+
+
 @app.post("/api/plan")
 async def plan(body: dict):
     """Stage 1: Generate mission plan from prompt."""
@@ -412,6 +499,7 @@ async def plan(body: dict):
 async def validate(body: dict):
     """Stage 2: Validate mission JSON."""
     mission = body.get("mission") or pipeline_state.get("last_mission")
+    connection_mode = pipeline_state.get("connection_mode", "simulation")
     if not mission:
         return JSONResponse(
             status_code=400,
@@ -430,20 +518,37 @@ async def validate(body: dict):
     pipeline_state["status"] = "validated" if result.valid else "validation_failed"
 
     if result.valid:
+        if connection_mode == "hardware":
+            hw_result = validate_hardware_safety(mission, pipeline_state["telemetry"])
+            result.valid = hw_result.valid
+            result.errors.extend(hw_result.errors)
+            result.warnings.extend(hw_result.warnings)
+            
+            pipeline_state["last_validation"] = {
+                "valid": result.valid,
+                "errors": result.errors,
+                "warnings": result.warnings,
+            }
+            pipeline_state["status"] = "validated" if result.valid else "validation_failed"
+
+    if result.valid:
         mode = pipeline_state.get("current_mode", "standard")
         num_drones = pipeline_state.get("num_drones", 3)
         
-        # Only start if not already running in this mode
-        if not (is_simulator_running() and pipeline_state.get("active_sim_mode") == mode and pipeline_state["telemetry"]["connected"]):
-            pipeline_state["telemetry"]["connected"] = False
-            ensure_simulator_running(mode, num_drones)
-            pipeline_state["active_sim_mode"] = mode
-            
-            # Wait for telemetry to connect
-            for _ in range(120):  # Wait up to 60 seconds (120 * 0.5s)
-                if pipeline_state["telemetry"]["connected"]:
-                    break
-                await asyncio.sleep(0.5)
+        if connection_mode == "hardware":
+            pass # Simulator not needed for hardware mode
+        else:
+            # Only start if not already running in this mode
+            if not (is_simulator_running() and pipeline_state.get("active_sim_mode") == mode and pipeline_state["telemetry"]["connected"]):
+                pipeline_state["telemetry"]["connected"] = False
+                ensure_simulator_running(mode, num_drones)
+                pipeline_state["active_sim_mode"] = mode
+                
+                # Wait for telemetry to connect
+                for _ in range(120):  # Wait up to 60 seconds (120 * 0.5s)
+                    if pipeline_state["telemetry"]["connected"]:
+                        break
+                    await asyncio.sleep(0.5)
 
     return {
         "success": result.valid,
@@ -457,6 +562,9 @@ async def validate(body: dict):
 
 
 def ensure_simulator_running(mode="standard", num_drones=3):
+    if pipeline_state.get("connection_mode") == "hardware":
+        return
+
     import subprocess
     import os
     try:
@@ -495,34 +603,50 @@ async def run_mission_background(mission: dict):
     mode = pipeline_state.get("current_mode", "standard")
     num_drones = pipeline_state.get("num_drones", 3)
 
-    # Check if simulator is already running and connected
-    if is_simulator_running() and pipeline_state["telemetry"]["connected"] and pipeline_state.get("active_sim_mode") == mode:
-        audit_log.record("simulator_connected", {"message": "Simulator already running and connected."})
-    else:
-        pipeline_state["telemetry"]["connected"] = False
-        audit_log.record("start_simulator", {"message": f"Starting simulator in '{mode}' mode with {num_drones} drones..."})
-        ensure_simulator_running(mode, num_drones)
-        pipeline_state["active_sim_mode"] = mode
-        
-        # Wait for the simulator to launch and telemetry to connect
-        connected = False
-        for _ in range(240):  # Wait up to 120 seconds (240 * 0.5s)
-            if pipeline_state["telemetry"]["connected"]:
-                connected = True
-                break
-            await asyncio.sleep(0.5)
+    connection_mode = pipeline_state.get("connection_mode", "simulation")
 
-        if not connected:
+    if connection_mode == "hardware":
+        # Check if hardware is connected
+        if not pipeline_state["telemetry"]["connected"]:
             pipeline_state["status"] = "error"
             pipeline_state["execution_log"].append({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "elapsed_s": 0.0,
                 "action": "error",
                 "status": "error",
-                "details": {"message": f"Failed to connect to simulator in '{mode}' mode."},
+                "details": {"message": "Hardware drone is not connected via serial."},
             })
             return
-        audit_log.record("simulator_connected", {"message": f"Simulator connected successfully in '{mode}' mode."})
+        audit_log.record("hardware_connected", {"message": "Executing mission on hardware via serial link."})
+    else:
+        # Check if simulator is already running and connected
+        if is_simulator_running() and pipeline_state["telemetry"]["connected"] and pipeline_state.get("active_sim_mode") == mode:
+            audit_log.record("simulator_connected", {"message": "Simulator already running and connected."})
+        else:
+            pipeline_state["telemetry"]["connected"] = False
+            audit_log.record("start_simulator", {"message": f"Starting simulator in '{mode}' mode with {num_drones} drones..."})
+            ensure_simulator_running(mode, num_drones)
+            pipeline_state["active_sim_mode"] = mode
+            
+            # Wait for the simulator to launch and telemetry to connect
+            connected = False
+            for _ in range(240):  # Wait up to 120 seconds (240 * 0.5s)
+                if pipeline_state["telemetry"]["connected"]:
+                    connected = True
+                    break
+                await asyncio.sleep(0.5)
+    
+            if not connected:
+                pipeline_state["status"] = "error"
+                pipeline_state["execution_log"].append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "elapsed_s": 0.0,
+                    "action": "error",
+                    "status": "error",
+                    "details": {"message": f"Failed to connect to simulator in '{mode}' mode."},
+                })
+                return
+            audit_log.record("simulator_connected", {"message": f"Simulator connected successfully in '{mode}' mode."})
 
     try:
         if mode == "swarm":
@@ -557,6 +681,11 @@ async def execute(body: dict):
         return JSONResponse(
             status_code=400,
             content={"success": False, "error": "No mission to execute"},
+        )
+    if pipeline_state.get("connection_mode") == "hardware" and not body.get("hardware_confirmed"):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": "Hardware execution must be explicitly confirmed by the operator."},
         )
     
     # Inject num_drones from pipeline state
