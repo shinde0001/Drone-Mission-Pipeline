@@ -223,10 +223,25 @@ async def monitor_single_drone_task(drone_idx=0, port=14540):
                     continue
             
             pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = True
+            
+            # Reset stale telemetry data from previous connection
+            pipeline_state["telemetry"]["drones"][drone_idx]["latitude"] = 0.0
+            pipeline_state["telemetry"]["drones"][drone_idx]["longitude"] = 0.0
+            pipeline_state["telemetry"]["drones"][drone_idx]["altitude_m"] = 0.0
+            pipeline_state["telemetry"]["drones"][drone_idx]["speed_mps"] = 0.0
+            pipeline_state["telemetry"]["drones"][drone_idx]["heading_deg"] = 0.0
+            pipeline_state["telemetry"]["drones"][drone_idx]["battery_pct"] = 0.0
+            
             swarm_drones[drone_idx] = drone
             
             if drone_idx == 0:
                 pipeline_state["telemetry"]["connected"] = True
+                pipeline_state["telemetry"]["latitude"] = 0.0
+                pipeline_state["telemetry"]["longitude"] = 0.0
+                pipeline_state["telemetry"]["altitude_m"] = 0.0
+                pipeline_state["telemetry"]["speed_mps"] = 0.0
+                pipeline_state["telemetry"]["heading_deg"] = 0.0
+                pipeline_state["telemetry"]["battery_pct"] = 0.0
                 
             async def run_position():
                 try:
