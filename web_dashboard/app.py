@@ -138,15 +138,9 @@ async def monitor_speed(drone):
 async def monitor_battery(drone):
     try:
         async for battery in drone.telemetry.battery():
-            update_telemetry_timestamp()
-            pct = battery.remaining_percent
-            if pct <= 1.0:
-                pct *= 100
-            pipeline_state["telemetry"]["battery_pct"] = pct
-    except Exception as e:
-        print(f"Error monitoring battery: {e}")
-
-async def monitor_single_drone_task(drone_idx: int, port: int):
+async def monitor_single_drone_task(drone_idx=0, port=14540):
+    import random
+    
     while True:
         try:
             is_hw = pipeline_state.get("connection_mode") == "hardware"
@@ -157,7 +151,9 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                 await asyncio.sleep(2)
                 continue
 
-            drone = System(port=50051 + drone_idx)
+            # Use a random port to prevent mavsdk_server port conflicts across retries
+            mavsdk_port = random.randint(50000, 60000)
+            drone = System(port=mavsdk_port)
             
             connected = False
             if is_hw:
@@ -174,25 +170,26 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                         for attempt in range(max_tries):
                             try:
                                 await drone.connect(system_address=f"serial://{port_path}:{b_rate}")
-                                # wait up to 3s for connection
-                                for _ in range(6):
+                                
+                                async def check_conn():
                                     async for state in drone.core.connection_state():
                                         if state.is_connected:
-                                            connected = True
-                                            break
-                                        break # Only check one item from async generator then sleep
-                                    if connected: break
-                                    await asyncio.sleep(0.5)
-                            except Exception:
-                                pass
+                                            return True
+                                
+                                # Wait up to 3s for connection
+                                connected = await asyncio.wait_for(check_conn(), timeout=3.0)
+                            except (asyncio.TimeoutError, Exception):
+                                connected = False
                             
                             if connected:
                                 print(f"Hardware drone {drone_idx} connected on {port_path} at {b_rate} baud (attempt {attempt + 1})")
-                                pipeline_state["baud_rate"] = b_rate # Save successful baud rate
+                                pipeline_state["baud_rate"] = b_rate
                                 break
+                            else:
+                                # Re-instantiate MAVSDK System on failure to avoid backend state corruption
+                                drone = System(port=random.randint(50000, 60000))
                             
                 if not connected:
-                    # Connection failed or no port assigned
                     pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
                     if drone_idx == 0:
                         pipeline_state["telemetry"]["connected"] = False
@@ -200,68 +197,95 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                     continue
                     
             else:
-                await drone.connect(system_address=f"udp://:{port}")
-                # wait for connection
-                async for state in drone.core.connection_state():
-                    if state.is_connected:
-                        connected = True
-                        break
+                try:
+                    await drone.connect(system_address=f"udp://:{port}")
+                    async def check_conn_udp():
+                        async for state in drone.core.connection_state():
+                            if state.is_connected:
+                                return True
+                    connected = await asyncio.wait_for(check_conn_udp(), timeout=5.0)
+                except (asyncio.TimeoutError, Exception):
+                    connected = False
+                
+                if not connected:
+                    pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
+                    if drone_idx == 0:
+                        pipeline_state["telemetry"]["connected"] = False
+                    await asyncio.sleep(2)
+                    continue
             
             pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = True
             swarm_drones[drone_idx] = drone
             
-            # Leader (index 0) updates the main telemetry dict for backwards compatibility
             if drone_idx == 0:
                 pipeline_state["telemetry"]["connected"] = True
                 
             async def run_position():
-                async for pos in drone.telemetry.position():
-                    pipeline_state["telemetry"]["drones"][drone_idx]["latitude"] = pos.latitude_deg
-                    pipeline_state["telemetry"]["drones"][drone_idx]["longitude"] = pos.longitude_deg
-                    pipeline_state["telemetry"]["drones"][drone_idx]["altitude_m"] = pos.relative_altitude_m
-                    if drone_idx == 0:
-                        pipeline_state["telemetry"]["latitude"] = pos.latitude_deg
-                        pipeline_state["telemetry"]["longitude"] = pos.longitude_deg
-                        pipeline_state["telemetry"]["altitude_m"] = pos.relative_altitude_m
-                        shared_telemetry_state["position"] = pos
-                        update_telemetry_timestamp()
+                try:
+                    async for pos in drone.telemetry.position():
+                        pipeline_state["telemetry"]["drones"][drone_idx]["latitude"] = pos.latitude_deg
+                        pipeline_state["telemetry"]["drones"][drone_idx]["longitude"] = pos.longitude_deg
+                        pipeline_state["telemetry"]["drones"][drone_idx]["altitude_m"] = pos.relative_altitude_m
+                        if drone_idx == 0:
+                            pipeline_state["telemetry"]["latitude"] = pos.latitude_deg
+                            pipeline_state["telemetry"]["longitude"] = pos.longitude_deg
+                            pipeline_state["telemetry"]["altitude_m"] = pos.relative_altitude_m
+                            shared_telemetry_state["position"] = pos
+                            update_telemetry_timestamp()
+                except Exception:
+                    pass
 
             async def run_home():
-                async for home_pos in drone.telemetry.home():
-                    if drone_idx == 0:
-                        shared_telemetry_state["home"] = home_pos
+                try:
+                    async for home_pos in drone.telemetry.home():
+                        if drone_idx == 0:
+                            shared_telemetry_state["home"] = home_pos
+                except Exception:
+                    pass
 
             async def run_armed():
-                async for armed in drone.telemetry.armed():
-                    pipeline_state["telemetry"]["drones"][drone_idx]["armed"] = armed
-                    if drone_idx == 0:
-                        pipeline_state["telemetry"]["armed"] = armed
-                        update_telemetry_timestamp()
+                try:
+                    async for armed in drone.telemetry.armed():
+                        pipeline_state["telemetry"]["drones"][drone_idx]["armed"] = armed
+                        if drone_idx == 0:
+                            pipeline_state["telemetry"]["armed"] = armed
+                            update_telemetry_timestamp()
+                except Exception:
+                    pass
 
             async def run_heading():
-                async for heading in drone.telemetry.heading():
-                    pipeline_state["telemetry"]["drones"][drone_idx]["heading_deg"] = heading.heading_deg
-                    if drone_idx == 0:
-                        pipeline_state["telemetry"]["heading_deg"] = heading.heading_deg
-                        update_telemetry_timestamp()
+                try:
+                    async for heading in drone.telemetry.heading():
+                        pipeline_state["telemetry"]["drones"][drone_idx]["heading_deg"] = heading.heading_deg
+                        if drone_idx == 0:
+                            pipeline_state["telemetry"]["heading_deg"] = heading.heading_deg
+                            update_telemetry_timestamp()
+                except Exception:
+                    pass
 
             async def run_speed():
-                async for velocity in drone.telemetry.velocity_ned():
-                    speed = (velocity.north_m_s**2 + velocity.east_m_s**2 + velocity.down_m_s**2)**0.5
-                    pipeline_state["telemetry"]["drones"][drone_idx]["speed_mps"] = speed
-                    if drone_idx == 0:
-                        pipeline_state["telemetry"]["speed_mps"] = speed
-                        update_telemetry_timestamp()
+                try:
+                    async for velocity in drone.telemetry.velocity_ned():
+                        speed = (velocity.north_m_s**2 + velocity.east_m_s**2 + velocity.down_m_s**2)**0.5
+                        pipeline_state["telemetry"]["drones"][drone_idx]["speed_mps"] = speed
+                        if drone_idx == 0:
+                            pipeline_state["telemetry"]["speed_mps"] = speed
+                            update_telemetry_timestamp()
+                except Exception:
+                    pass
 
             async def run_battery():
-                async for battery in drone.telemetry.battery():
-                    pct = battery.remaining_percent
-                    if pct <= 1.0:
-                        pct *= 100
-                    pipeline_state["telemetry"]["drones"][drone_idx]["battery_pct"] = pct
-                    if drone_idx == 0:
-                        pipeline_state["telemetry"]["battery_pct"] = pct
-                        update_telemetry_timestamp()
+                try:
+                    async for battery in drone.telemetry.battery():
+                        pct = battery.remaining_percent
+                        if pct <= 1.0:
+                            pct *= 100
+                        pipeline_state["telemetry"]["drones"][drone_idx]["battery_pct"] = pct
+                        if drone_idx == 0:
+                            pipeline_state["telemetry"]["battery_pct"] = pct
+                            update_telemetry_timestamp()
+                except Exception:
+                    pass
 
             async def run_status_text():
                 try:
@@ -286,19 +310,24 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                     print(f"Error monitoring status text for drone {drone_idx}: {e}")
 
             async def run_continuous_log():
-                while True:
-                    await asyncio.sleep(2.0)
-                    if pipeline_state["telemetry"]["drones"][drone_idx]["connected"]:
-                        alt = pipeline_state["telemetry"]["drones"][drone_idx]["altitude_m"]
-                        spd = pipeline_state["telemetry"]["drones"][drone_idx]["speed_mps"]
-                        hdg = pipeline_state["telemetry"]["drones"][drone_idx]["heading_deg"]
-                        pipeline_state["drone_logs"][drone_idx].append({
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "status": "info",
-                            "message": f"[Live Telemetry] Alt: {alt:.1f}m | Speed: {spd:.1f}m/s | Heading: {hdg:.0f}°"
-                        })
-                        if len(pipeline_state["drone_logs"][drone_idx]) > 100:
-                            pipeline_state["drone_logs"][drone_idx] = pipeline_state["drone_logs"][drone_idx][-100:]
+                try:
+                    while True:
+                        await asyncio.sleep(2.0)
+                        if pipeline_state["telemetry"]["drones"][drone_idx]["connected"]:
+                            alt = pipeline_state["telemetry"]["drones"][drone_idx]["altitude_m"]
+                            spd = pipeline_state["telemetry"]["drones"][drone_idx]["speed_mps"]
+                            hdg = pipeline_state["telemetry"]["drones"][drone_idx]["heading_deg"]
+                            pipeline_state["drone_logs"][drone_idx].append({
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "status": "info",
+                                "message": f"[Live Telemetry] Alt: {alt:.1f}m | Speed: {spd:.1f}m/s | Heading: {hdg:.0f}°"
+                            })
+                            if len(pipeline_state["drone_logs"][drone_idx]) > 100:
+                                pipeline_state["drone_logs"][drone_idx] = pipeline_state["drone_logs"][drone_idx][-100:]
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
 
             tasks = [
                 asyncio.create_task(run_position()),
@@ -314,21 +343,29 @@ async def monitor_single_drone_task(drone_idx: int, port: int):
                 global shared_drone
                 shared_drone = drone
 
-            # Watch connection state to handle disconnection
-            async for state in drone.core.connection_state():
-                if not state.is_connected:
-                    break
-
+            # Monitor connection mode changes or disconnection
+            initial_mode = pipeline_state.get("connection_mode")
+            while True:
+                current_mode = pipeline_state.get("connection_mode")
+                if current_mode != initial_mode:
+                    break # Connection mode changed, reconnect
+                
+                if not is_hw and not is_simulator_running():
+                    break # Simulator killed
+                
+                await asyncio.sleep(1)
+                
+            # Cleanup when breaking out of the loop
             for t in tasks:
                 t.cancel()
+            
+            pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
+            if drone_idx == 0:
+                pipeline_state["telemetry"]["connected"] = False
 
         except Exception as e:
-            pass
-        
-        pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
-        if drone_idx == 0:
-            pipeline_state["telemetry"]["connected"] = False
-        await asyncio.sleep(2)
+            print(f"Error in monitor task for drone {drone_idx}: {e}")
+            await asyncio.sleep(2)
 
 
 async def telemetry_background_task():
