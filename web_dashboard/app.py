@@ -195,12 +195,23 @@ async def monitor_single_drone_task(drone_idx=0, port=14540):
                                 break
                             else:
                                 # Re-instantiate MAVSDK System on failure to avoid backend state corruption
+                                try:
+                                    drone._stop_mavsdk_server()
+                                except Exception:
+                                    pass
+                                await asyncio.sleep(0.5) # Allow OS to free the serial port lock
                                 drone = System(port=random.randint(50000, 60000))
                             
                 if not connected:
                     pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
                     if drone_idx == 0:
                         pipeline_state["telemetry"]["connected"] = False
+                    
+                    try:
+                        drone._stop_mavsdk_server()
+                    except Exception:
+                        pass
+                        
                     await asyncio.sleep(2)
                     continue
                     
@@ -219,6 +230,12 @@ async def monitor_single_drone_task(drone_idx=0, port=14540):
                     pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
                     if drone_idx == 0:
                         pipeline_state["telemetry"]["connected"] = False
+                    
+                    try:
+                        drone._stop_mavsdk_server()
+                    except Exception:
+                        pass
+                        
                     await asyncio.sleep(2)
                     continue
             
@@ -382,12 +399,21 @@ async def monitor_single_drone_task(drone_idx=0, port=14540):
             for t in tasks:
                 t.cancel()
             
+            try:
+                drone._stop_mavsdk_server()
+            except Exception:
+                pass
+            
             pipeline_state["telemetry"]["drones"][drone_idx]["connected"] = False
             if drone_idx == 0:
                 pipeline_state["telemetry"]["connected"] = False
 
         except Exception as e:
             print(f"Error in monitor task for drone {drone_idx}: {e}")
+            try:
+                drone._stop_mavsdk_server()
+            except Exception:
+                pass
             await asyncio.sleep(2)
 
 
