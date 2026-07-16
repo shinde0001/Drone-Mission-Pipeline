@@ -142,6 +142,46 @@
     .mode-option input[type="radio"] { accent-color:var(--orange); }
     .mode-warning { font-size:12px; color:var(--amber); background:var(--amber-l); border:1px solid #fcd34d; border-radius:var(--radius-s); padding:6px 12px; margin-top:10px; }
 
+    /* ── MAIN OPERATING MODE SELECTOR (CENTERED & TITLE SIZE) ── */
+    .main-mode-selector {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 24px 30px;
+    }
+    .main-mode-selector .mode-title {
+        font-size: 15px;
+        font-weight: 800;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 18px;
+    }
+    .main-mode-selector .mode-options {
+        display: flex;
+        justify-content: center;
+        gap: 18px;
+        width: 100%;
+    }
+    .main-mode-selector .mode-option {
+        padding: 14px 28px;
+        font-size: 18px;
+        font-weight: 700;
+        border-width: 2px;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-s);
+    }
+    .main-mode-selector .mode-option:hover {
+        transform: translateY(-1px);
+        box-shadow: var(--shadow);
+    }
+    .main-mode-selector .mode-option input[type="radio"] {
+        transform: scale(1.4);
+        margin-right: 8px;
+    }
+
     /* ── PROMPT CARD ── */
     .prompt-card { }
     .prompt-input-wrapper { display:flex; gap:8px; width:100%; margin-bottom:10px; }
@@ -456,36 +496,9 @@
     <!-- ── Main Content ───────────────────────────── -->
     <main class="main">
 
-        <!-- Pipeline Flow Indicator -->
-        <div class="pipeline-flow" id="pipelineFlow">
-            <div class="pipeline-step" id="step-prompt" data-step="prompt">
-                <span class="pipeline-step-icon">💬</span>
-                <span class="pipeline-step-label">Prompt</span>
-            </div>
-            <span class="pipeline-arrow" id="arrow-1">→</span>
-            <div class="pipeline-step" id="step-llm" data-step="llm">
-                <span class="pipeline-step-icon">🧠</span>
-                <span class="pipeline-step-label">LLM Plan</span>
-            </div>
-            <span class="pipeline-arrow" id="arrow-2">→</span>
-            <div class="pipeline-step" id="step-validate" data-step="validate">
-                <span class="pipeline-step-icon">🛡️</span>
-                <span class="pipeline-step-label">Validate</span>
-            </div>
-            <span class="pipeline-arrow" id="arrow-3">→</span>
-            <div class="pipeline-step" id="step-execute" data-step="execute">
-                <span class="pipeline-step-icon">🚀</span>
-                <span class="pipeline-step-label">Execute</span>
-            </div>
-            <span class="pipeline-arrow" id="arrow-4">→</span>
-            <div class="pipeline-step" id="step-sim" data-step="sim">
-                <span class="pipeline-step-icon">🎮</span>
-                <span class="pipeline-step-label">Gazebo</span>
-            </div>
-        </div>
 
         <!-- Mode Selector -->
-        <div class="mode-selector">
+        <div class="mode-selector main-mode-selector">
             <div class="mode-title">⚙️ Operating Mode</div>
             <div class="mode-options">
                 <label class="mode-option">
@@ -1759,7 +1772,10 @@
 
             // Update completed prompt step when we start LLM
             if (stepName === 'llm' && state === 'active') {
-                document.getElementById('step-prompt').className = 'pipeline-step completed';
+                const promptStep = document.getElementById('step-prompt');
+                if (promptStep) {
+                    promptStep.className = 'pipeline-step completed';
+                }
             }
         }
 

@@ -18,8 +18,6 @@ import subprocess
 import shutil
 from pathlib import Path
 
-from openai import OpenAI
-
 from .utils import (
     load_mission_schema,
     load_waypoint_library,
@@ -505,10 +503,6 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
     else:
         print_info("Using local LLM via Ollama.")
         logger.info("Using local LLM via Ollama.")
-        client = OpenAI(
-            base_url='http://127.0.0.1:11434/v1',
-            api_key='ollama',
-        )
         model_name = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
         is_local = True
 
@@ -573,17 +567,27 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
                 response = chat.send_message(prompt)
                 raw_content = response.text
             else:
-                # For Ollama: pass the full few-shot message list directly
-                api_kwargs = dict(
-                    model=model_name,
-                    messages=few_shot_messages,
-                    temperature=0.1,  # Low temp for deterministic structured output
-                    max_tokens=2000,
-                    extra_body={"num_ctx": 4096},  # Increased context for few-shot examples
-                    response_format={"type": "json_object"}
+                # For Ollama: query directly via HTTP POST
+                import urllib.request
+                payload = {
+                    "model": model_name,
+                    "messages": few_shot_messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_ctx": 4096
+                    },
+                    "format": "json"
+                }
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    "http://127.0.0.1:11434/api/chat",
+                    data=data,
+                    headers={"Content-Type": "application/json"}
                 )
-                response = client.chat.completions.create(**api_kwargs)
-                raw_content = response.choices[0].message.content
+                with urllib.request.urlopen(req, timeout=60.0) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    raw_content = resp_data["message"]["content"]
         except Exception as e:
             last_error = e
             if attempt == max_attempts:
@@ -898,11 +902,7 @@ def _setup_llm_client(ai_engine: str, api_key: str = None):
             except Exception as e:
                 raise RuntimeError(f"Failed to pull Ollama model '{model_name}': {e}")
 
-        client = OpenAI(
-            base_url='http://127.0.0.1:11434/v1',
-            api_key='ollama',
-        )
-        return client, None, model_name, True
+        return None, None, model_name, True
 
     elif ai_engine.startswith("online"):
         if ai_engine == "online_lite":
@@ -982,16 +982,26 @@ def _call_llm_json(system_prompt: str, user_prompt: str, few_shot_examples: list
                 if is_local:
                     _touch_ollama()
 
-                api_kwargs = dict(
-                    model=model_name,
-                    messages=messages,
-                    temperature=0.1,
-                    max_tokens=1500,
-                    extra_body={"num_ctx": 4096},
-                    response_format={"type": "json_object"}
+                import urllib.request
+                payload = {
+                    "model": model_name,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_ctx": 4096
+                    },
+                    "format": "json"
+                }
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    "http://127.0.0.1:11434/api/chat",
+                    data=data,
+                    headers={"Content-Type": "application/json"}
                 )
-                response = client.chat.completions.create(**api_kwargs)
-                raw_content = response.choices[0].message.content
+                with urllib.request.urlopen(req, timeout=60.0) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                    raw_content = resp_data["message"]["content"]
 
             if is_local:
                 _touch_ollama()

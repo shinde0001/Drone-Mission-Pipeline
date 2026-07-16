@@ -250,6 +250,46 @@ body {
   color: var(--orange-dark); font-weight: 600;
 }
 
+/* ── MAIN OPERATING MODE SELECTOR (CENTERED & TITLE SIZE) ── */
+.main-mode-selector {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px 30px;
+}
+.main-mode-selector .mode-title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 18px;
+}
+.main-mode-selector .mode-options {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  width: 100%;
+}
+.main-mode-selector .mode-option {
+  padding: 14px 28px;
+  font-size: 18px;
+  font-weight: 700;
+  border-width: 2px;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.main-mode-selector .mode-option:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow);
+}
+.main-mode-selector .mode-option input[type="radio"] {
+  transform: scale(1.4);
+  margin-right: 8px;
+}
+
 /* ══════════════ PROMPT CARD ══════════════ */
 .prompt-card { grid-column: 1/-1; }
 
