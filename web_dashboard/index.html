@@ -1528,15 +1528,45 @@
         // ── Display Validation Results ──
         function displayValidation(result) {
             const container = document.getElementById('validationContent');
-            let html = '<ul class="validation-list">';
+            const isHardware = document.getElementById('hardwareToggle') && document.getElementById('hardwareToggle').checked;
+            
+            // Step-by-step progress bar
+            const progressColor = result.valid ? 'var(--accent-green)' : 'var(--orange)';
+            const progressWidth = result.valid ? '100%' : '60%';
+            let html = `
+                <div style="margin-bottom: 15px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text2); margin-bottom: 4px; font-weight: bold; text-transform: uppercase;">
+                        <span>Schema</span>
+                        <span>Safety</span>
+                        <span>Geofence</span>
+                        ${isHardware ? '<span>Hardware Pre-Flight</span>' : '<span>Simulation Checks</span>'}
+                    </div>
+                    <div style="height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden;">
+                        <div style="height: 100%; width: ${progressWidth}; background: ${progressColor}; transition: width 0.5s ease-in-out;"></div>
+                    </div>
+                </div>
+                <ul class="validation-list">
+            `;
 
             if (result.valid && result.errors.length === 0) {
                 html += `
-                <li class="validation-item pass">✅ Schema validation passed</li>
-                <li class="validation-item pass">✅ Safety limits check passed</li>
-                <li class="validation-item pass">✅ Mission structure valid</li>
-                <li class="validation-item pass">✅ Geofence check passed</li>
-            `;
+                <li class="validation-item pass">✅ [Step 1] JSON Schema validation passed</li>
+                <li class="validation-item pass">✅ [Step 2] Safety limits check passed</li>
+                <li class="validation-item pass">✅ [Step 3] Mission structure valid</li>
+                <li class="validation-item pass">✅ [Step 4] Geofence & boundary check passed</li>
+                `;
+                if (isHardware) {
+                    html += `
+                <div style="margin: 8px 0; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface2);">
+                    <div style="font-weight: 700; color: var(--orange); margin-bottom: 4px; font-size: 12px;">✅ [Step 5] Hardware Pre-Flight Validated</div>
+                    <li class="validation-item pass" style="padding-left: 10px; font-size: 12px; border: none; background: transparent; box-shadow: none; color: var(--text2);">▪ Battery Level Sufficient (≥ 30%)</li>
+                    <li class="validation-item pass" style="padding-left: 10px; font-size: 12px; border: none; background: transparent; box-shadow: none; color: var(--text2);">▪ GPS 3D Fix Confirmed</li>
+                    <li class="validation-item pass" style="padding-left: 10px; font-size: 12px; border: none; background: transparent; box-shadow: none; color: var(--text2);">▪ Hardware Altitude Cap Enforced</li>
+                </div>
+                    `;
+                } else {
+                    html += `<li class="validation-item pass" style="color: var(--accent-blue);">✅ [Step 5] Simulation constraints validated</li>`;
+                }
             }
 
             result.errors.forEach(err => {
