@@ -113,7 +113,16 @@ if [ "$MODE" == "swarm" ]; then
         gazebo "${src_path}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/empty.world" &
     fi
     GAZEBO_PID=$!
-    sleep 3
+    
+    echo -e "${YELLOW}Waiting for Gazebo server to be ready...${NC}"
+    for ((t=0; t<30; t++)); do
+        if gz topic -l &>/dev/null; then
+            echo -e "${GREEN}Gazebo is ready!${NC}"
+            break
+        fi
+        sleep 1
+    done
+    sleep 2 # Additional settle time
 
     # Spawn each drone as PX4 instance 0, 1, 2, ...
     for ((i=0; i<NUM_DRONES; i++)); do

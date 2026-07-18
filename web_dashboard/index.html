@@ -903,6 +903,8 @@
         const API = '';  // Same origin
         let currentMission = null;
         let isValidated = false;
+        let lastTelemetry = null;
+        let lastSystemStatus = 'idle';
 
         // ── Example prompts ──
         function setExample(text) {
@@ -1202,13 +1204,14 @@
                     displayValidation(data.validation);
                     if (data.validation.valid) {
                         isValidated = true;
-                        document.getElementById('executeBtn').disabled = false;
                         setPipelineStep('validate', 'completed');
                         setStatus('validated', 'Mission Validated ✓');
                     } else {
+                        isValidated = false;
                         setPipelineStep('validate', 'error');
                         setStatus('error', 'Validation Failed');
                     }
+                    updateExecuteButtonState();
                 }
 
                 // Draw waypoints on map
@@ -1219,6 +1222,8 @@
             } catch (err) {
                 setStatus('error', `Error: ${err.message}`);
                 setPipelineStep('llm', 'error');
+                isValidated = false;
+                updateExecuteButtonState();
             }
 
             btn.disabled = false;
@@ -1244,9 +1249,8 @@
                 return;
             }
 
-            const btn = document.getElementById('executeBtn');
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner"></span> Executing...';
+            lastSystemStatus = 'executing';
+            updateExecuteButtonState();
 
             setStatus('executing', 'Executing Mission...');
             setPipelineStep('execute', 'active');
@@ -1272,14 +1276,14 @@
                     displayExecLog([{ action: 'error', status: 'error', details: { message: data.error } }]);
                     setPipelineStep('execute', 'error');
                     setStatus('error', `Failed: ${data.error}`);
-                    btn.disabled = false;
-                    btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                    lastSystemStatus = 'error';
+                    updateExecuteButtonState();
                 }
             } catch (err) {
                 setStatus('error', `Execution error: ${err.message}`);
                 setPipelineStep('execute', 'error');
-                btn.disabled = false;
-                btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                lastSystemStatus = 'error';
+                updateExecuteButtonState();
             }
         }
 
@@ -1301,7 +1305,12 @@
         async function handleHold() {
             const btn = document.getElementById('holdBtn');
             try {
-                const res = await fetch(`${API}/api/action/hold`, { method: 'POST' });
+                const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+                const res = await fetch(`${API}/api/action/hold`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: currentMode, num_drones: currentMode === 'swarm' ? 3 : 1 })
+                });
                 const data = await res.json();
                 if (!data.success) {
                     console.error("Hold failed:", data.error);
@@ -1329,7 +1338,12 @@
         async function handleArm() {
             setStatus('executing', 'Arming drone...');
             try {
-                const res = await fetch(`${API}/api/action/arm`, { method: 'POST' });
+                const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+                const res = await fetch(`${API}/api/action/arm`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: currentMode, num_drones: currentMode === 'swarm' ? 3 : 1 })
+                });
                 const data = await res.json();
                 if (!data.success) {
                     console.error("Arm failed:", data.error);
@@ -1344,7 +1358,12 @@
         async function handleDisarm() {
             setStatus('executing', 'Disarming drone...');
             try {
-                const res = await fetch(`${API}/api/action/disarm`, { method: 'POST' });
+                const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+                const res = await fetch(`${API}/api/action/disarm`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: currentMode, num_drones: currentMode === 'swarm' ? 3 : 1 })
+                });
                 const data = await res.json();
                 if (!data.success) {
                     console.error("Disarm failed:", data.error);
@@ -1358,10 +1377,16 @@
         // ── Live Movement Action ──
         async function handleMove(direction) {
             try {
+                const currentMode = document.querySelector('input[name="opMode"]:checked').value;
                 const res = await fetch(`${API}/api/action/move`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ direction: direction, distance: 5.0 })
+                    body: JSON.stringify({
+                        direction: direction,
+                        distance: 5.0,
+                        mode: currentMode,
+                        num_drones: currentMode === 'swarm' ? 3 : 1
+                    })
                 });
                 const data = await res.json();
                 if (!data.success) {
@@ -1395,7 +1420,12 @@
         async function handleRTL() {
             setStatus('executing', 'Returning to Launch...');
             try {
-                const res = await fetch(`${API}/api/action/rtl`, { method: 'POST' });
+                const currentMode = document.querySelector('input[name="opMode"]:checked').value;
+                const res = await fetch(`${API}/api/action/rtl`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: currentMode, num_drones: currentMode === 'swarm' ? 3 : 1 })
+                });
                 const data = await res.json();
                 if (!data.success) {
                     console.error("RTL failed:", data.error);
@@ -1503,25 +1533,20 @@
                     if (data.valid) {
                         currentMission = editedMission; // Update current mission!
                         isValidated = true;
-                        
-                        // Overwrite executeBtn onclick
-                        const executeBtn = document.getElementById('executeBtn');
-                        executeBtn.disabled = false;
-                        executeBtn.onclick = function() {
-                            handleExecute();
-                        };
                         setPipelineStep('validate', 'completed');
                         setStatus('validated', 'Edited Mission Validated ✓');
                         drawWaypointMap(editedMission); // Update the map
                     } else {
                         isValidated = false;
-                        document.getElementById('executeBtn').disabled = true;
                         setPipelineStep('validate', 'error');
                         setStatus('error', 'Validation Failed');
                     }
+                    updateExecuteButtonState();
                 }
             } catch (err) {
                 setStatus('error', 'Validation error: ' + err.message);
+                isValidated = false;
+                updateExecuteButtonState();
             }
         }
 
@@ -2028,10 +2053,7 @@
             currentMission = null;
             isValidated = false;
             document.getElementById('promptInput').value = '';
-            const execBtn = document.getElementById('executeBtn');
-            execBtn.disabled = true;
-            execBtn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
-            lucide.createIcons();
+            updateExecuteButtonState();
             setStatus('idle', 'Idle');
 
             // Reset pipeline indicators
@@ -2067,6 +2089,42 @@
             updateMovementSection(false, 'idle');
         }
 
+        /**
+         * Update the disabled/enabled status and label of the executeBtn.
+         */
+        function updateExecuteButtonState() {
+            const btn = document.getElementById('executeBtn');
+            if (!btn) return;
+
+            const isExecuting = (lastSystemStatus === 'executing' || lastSystemStatus === 'holding');
+
+            if (isExecuting) {
+                btn.disabled = true;
+                if (!btn.innerHTML.includes('Executing...')) {
+                    btn.innerHTML = '<span class="spinner"></span> Executing...';
+                }
+            } else {
+                let isDroneArmed = false;
+                const tel = lastTelemetry;
+                if (tel && tel.drones && tel.drones.length > 0) {
+                    isDroneArmed = tel.drones.some(d => d.connected && d.armed);
+                } else if (tel) {
+                    isDroneArmed = !!tel.armed;
+                }
+
+                if (isValidated && !isDroneArmed) {
+                    btn.disabled = false;
+                } else {
+                    btn.disabled = true;
+                }
+
+                if (btn.innerHTML.includes('Executing...')) {
+                    btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                    if (window.lucide) lucide.createIcons();
+                }
+            }
+        }
+
         // ── WebSocket telemetry (connect when available) ──
         let lastStatus = null;
         function connectTelemetry() {
@@ -2075,6 +2133,7 @@
                 ws.onmessage = (event) => {
                     const data = JSON.parse(event.data);
                     const tel = data.telemetry || data;
+                    lastTelemetry = tel;
                     
                     if (tel.drones && tel.drones.length > 0) {
                         tel.drones.forEach((drone, idx) => {
@@ -2090,7 +2149,7 @@
                             const lonEl = document.getElementById(`telLon_${idx}`);
                             if (lonEl) lonEl.textContent = isDConnected && drone.longitude !== undefined ? drone.longitude.toFixed(6) : '--';
                             const batEl = document.getElementById(`telBat_${idx}`);
-                            if (batEl) batEl.textContent = isDConnected && drone.battery_pct !== undefined ? drone.battery_pct.toFixed(0) : '--';
+                            if (batEl) batEl.textContent = isDConnected && drone.battery_pct != null ? drone.battery_pct.toFixed(0) : '--';
                             
                             const connEl = document.getElementById(`telConn_${idx}`);
                             if (connEl) {
@@ -2111,7 +2170,7 @@
                         const lonEl = document.getElementById('telLon_0');
                         if (lonEl) lonEl.textContent = isConnected && tel.longitude !== undefined ? tel.longitude.toFixed(6) : '--';
                         const batEl = document.getElementById('telBat_0');
-                        if (batEl) batEl.textContent = isConnected && tel.battery_pct !== undefined ? tel.battery_pct.toFixed(0) : '--';
+                        if (batEl) batEl.textContent = isConnected && tel.battery_pct != null ? tel.battery_pct.toFixed(0) : '--';
                         
                         const connEl = document.getElementById('telConn_0');
                         if (connEl) {
@@ -2242,6 +2301,7 @@
 
                     // Update manual override section visibility and enablement
                     const status = data.status || 'idle';
+                    lastSystemStatus = status;
                     updateMovementSection(isConnected, status);
 
                     // Handle execution state updates from background tasks
@@ -2277,43 +2337,46 @@
                                 holdBtn.style.borderColor = 'var(--accent-orange)';
                             }
                             isHolding = true;
-                        } else if (status === 'completed' && lastStatus === 'executing') {
+                        } else if (status === 'completed') {
                             const btn = document.getElementById('executeBtn');
-                            btn.disabled = false;
-                            btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                            if (btn) {
+                                btn.disabled = false;
+                                if (btn.innerHTML.includes('Executing...')) {
+                                    btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                                    if (window.lucide) lucide.createIcons();
+                                }
+                            }
                             setStatus('completed', 'Mission Complete ✓');
                             setPipelineStep('execute', 'completed');
                             setPipelineStep('sim', 'completed');
-                            document.getElementById('execBadge').textContent = 'Complete';
-                            document.getElementById('execBadge').className = 'card-badge badge-success';
+                            const badge = document.getElementById('execBadge');
+                            if (badge) {
+                                badge.textContent = 'Complete';
+                                badge.className = 'card-badge badge-success';
+                            }
                             displayExecLog(log);
-                        } else if (status === 'error' && lastStatus === 'executing') {
+                        } else if (status === 'error') {
                             const btn = document.getElementById('executeBtn');
-                            btn.disabled = false;
-                            btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                            if (btn) {
+                                btn.disabled = false;
+                                if (btn.innerHTML.includes('Executing...')) {
+                                    btn.innerHTML = '<i data-lucide="rocket"></i> Execute Mission';
+                                    if (window.lucide) lucide.createIcons();
+                                }
+                            }
                             setStatus('error', 'Execution Failed');
                             setPipelineStep('execute', 'error');
                             setPipelineStep('sim', 'error');
-                            document.getElementById('execBadge').textContent = 'Failed';
-                            document.getElementById('execBadge').className = 'card-badge badge-error';
-                            displayExecLog(log);
-                        } else if (log.length > 0 && document.getElementById('execBadge').textContent === 'Awaiting') {
-                            // Restore logs on load/refresh if we already have one
-                            displayExecLog(log);
-                            if (status === 'completed') {
-                                document.getElementById('execBadge').textContent = 'Complete';
-                                document.getElementById('execBadge').className = 'card-badge badge-success';
-                                setPipelineStep('execute', 'completed');
-                                setPipelineStep('sim', 'completed');
-                            } else if (status === 'error') {
-                                document.getElementById('execBadge').textContent = 'Failed';
-                                document.getElementById('execBadge').className = 'card-badge badge-error';
-                                setPipelineStep('execute', 'error');
-                                setPipelineStep('sim', 'error');
+                            const badge = document.getElementById('execBadge');
+                            if (badge) {
+                                badge.textContent = 'Failed';
+                                badge.className = 'card-badge badge-error';
                             }
+                            displayExecLog(log);
                         }
                         lastStatus = status;
                     }
+                    updateExecuteButtonState();
                 };
                 ws.onclose = () => {
                     setTimeout(connectTelemetry, 3000);
@@ -2714,8 +2777,9 @@
             fetch(`${API}/api/status`).then(r => r.json()).then(data => {
                 const tel = data.telemetry;
                 const bat = tel.battery_pct;
-                const batColor = bat >= 30 ? 'var(--text)' : '#ef4444';
-                const batIcon = bat >= 30 ? '✅' : '❌';
+                const batColor = bat === null || bat === undefined ? '#f59e0b' : (bat >= 30 ? 'var(--text)' : '#ef4444');
+                const batIcon = bat === null || bat === undefined ? '⚠️' : (bat >= 30 ? '✅' : '❌');
+                const batText = bat === null || bat === undefined ? 'Unknown (using USB power?)' : `${bat.toFixed(1)}%`;
                 
                 const lat = tel.latitude;
                 const lon = tel.longitude;
@@ -2724,7 +2788,7 @@
                 const gpsColor = gpsValid ? 'var(--text)' : '#ef4444';
                 
                 checklist.innerHTML = `
-                    <div style="color: ${batColor}">${batIcon} Battery: ${bat.toFixed(1)}%</div>
+                    <div style="color: ${batColor}">${batIcon} Battery: ${batText}</div>
                     <div style="color: ${gpsColor}">${gpsIcon} GPS Fix: ${gpsValid ? 'Valid' : 'Waiting...'}</div>
                     <div style="color: var(--text)">✅ Geofence: Active</div>
                 `;
@@ -2754,9 +2818,79 @@
             }
         }
 
+        async function loadInitialStatus() {
+            try {
+                const res = await fetch(`${API}/api/status`);
+                const data = await res.json();
+                
+                if (data.connection_mode) {
+                    const isHw = (data.connection_mode === 'hardware');
+                    const toggle = document.getElementById('hardwareToggle');
+                    if (toggle) {
+                        toggle.checked = isHw;
+                        toggleHardwareMode(toggle);
+                    }
+                }
+                
+                if (data.last_mission) {
+                    currentMission = data.last_mission;
+                    displayMissionJSON(data.last_mission);
+                    setPipelineStep('llm', 'completed');
+                }
+                
+                if (data.last_validation) {
+                    displayValidation(data.last_validation);
+                    if (data.last_validation.valid) {
+                        isValidated = true;
+                        setPipelineStep('validate', 'completed');
+                        setStatus('validated', 'Mission Validated ✓');
+                    } else {
+                        isValidated = false;
+                        setPipelineStep('validate', 'error');
+                        setStatus('error', 'Validation Failed');
+                    }
+                }
+                
+                if (data.status) {
+                    lastSystemStatus = data.status;
+                    setStatus(data.status, data.status.charAt(0).toUpperCase() + data.status.slice(1));
+                    
+                    if (data.status === 'executing') {
+                        setPipelineStep('execute', 'active');
+                        setPipelineStep('sim', 'active');
+                    } else if (data.status === 'completed') {
+                        setPipelineStep('execute', 'completed');
+                        setPipelineStep('sim', 'completed');
+                        const execBadge = document.getElementById('execBadge');
+                        if (execBadge) {
+                            execBadge.textContent = 'Complete';
+                            execBadge.className = 'card-badge badge-success';
+                        }
+                    } else if (data.status === 'error') {
+                        setPipelineStep('execute', 'error');
+                        setPipelineStep('sim', 'error');
+                        const execBadge = document.getElementById('execBadge');
+                        if (execBadge) {
+                            execBadge.textContent = 'Failed';
+                            execBadge.className = 'card-badge badge-error';
+                        }
+                    }
+                }
+                
+                if (data.execution_log && data.execution_log.length > 0) {
+                    displayExecLog(data.execution_log);
+                }
+                
+                updateExecuteButtonState();
+            } catch (err) {
+                console.error("Failed to load initial status:", err);
+            }
+        }
+
         // Initialize on load
         loadSafetyLimits();
         handleModeChange();
+        loadInitialStatus();
         lucide.createIcons();
 
     </script>

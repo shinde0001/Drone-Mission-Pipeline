@@ -72,13 +72,13 @@ async def _execute_takeoff(drone: System, params: dict,
     """Execute a takeoff action."""
     altitude = params.get("altitude_m", 10)
     logger.info(f"Takeoff to {altitude}m")
-    audit.record("takeoff", {"altitude_m": altitude})
+    audit.record("takeoff", {"altitude_m": altitude, "message": f"Commanding takeoff to {altitude}m"})
 
     # Arm the drone
     print_info("Arming drone...")
     await drone.action.arm()
     print_success("Drone armed")
-    audit.record("arm")
+    audit.record("arm", {"message": "Arming drone"})
 
     # Set takeoff altitude and take off
     await drone.action.set_takeoff_altitude(altitude)
@@ -118,7 +118,8 @@ async def _execute_goto(drone: System, params: dict,
     logger.info(f"Goto N={north}m E={east}m Alt={altitude}m @ {speed}m/s")
     audit.record("goto", {
         "north_m": north, "east_m": east,
-        "altitude_m": altitude, "speed_mps": speed
+        "altitude_m": altitude, "speed_mps": speed,
+        "message": f"Flying to N={north}m E={east}m Alt={altitude}m @ {speed}m/s"
     })
 
     # Set an initial setpoint before starting offboard mode
@@ -215,7 +216,10 @@ async def _execute_goto(drone: System, params: dict,
                 break
             await asyncio.sleep(POSITION_CHECK_INTERVAL_S)
 
-    audit.record("waypoint_reached", {"north_m": north, "east_m": east})
+    audit.record("waypoint_reached", {
+        "north_m": north, "east_m": east,
+        "message": f"Reached waypoint N={north}m E={east}m"
+    })
 
 
 async def _execute_loiter(drone: System, params: dict,
@@ -223,7 +227,7 @@ async def _execute_loiter(drone: System, params: dict,
     """Hold current position for a specified duration."""
     duration = params.get("duration_s", 5)
     logger.info(f"Loiter for {duration}s")
-    audit.record("loiter", {"duration_s": duration})
+    audit.record("loiter", {"duration_s": duration, "message": f"Loitering / Hovering for {duration}s"})
 
     print_info(f"  ⏱ Hovering for {duration}s...")
     await asyncio.sleep(duration)
@@ -234,7 +238,7 @@ async def _execute_land(drone: System, params: dict,
                         audit: AuditLog, *args, **kwargs) -> None:
     """Land the drone at current position."""
     logger.info("Landing")
-    audit.record("land")
+    audit.record("land", {"message": "Commanding landing"})
 
     # Stop offboard mode if active
     try:
@@ -251,14 +255,14 @@ async def _execute_land(drone: System, params: dict,
             print_success("Drone landed and disarmed")
             break
 
-    audit.record("landed")
+    audit.record("landed", {"message": "Drone landed and disarmed"})
 
 
 async def _execute_return_to_launch(drone: System, params: dict,
                                     audit: AuditLog, *args, **kwargs) -> None:
     """Return to launch position and land."""
     logger.info("Return to launch")
-    audit.record("return_to_launch")
+    audit.record("return_to_launch", {"message": "Commanding Return-To-Launch (RTL)"})
 
     try:
         await drone.offboard.stop()
@@ -274,7 +278,7 @@ async def _execute_return_to_launch(drone: System, params: dict,
             print_success("Returned to launch and landed")
             break
 
-    audit.record("rtl_complete")
+    audit.record("rtl_complete", {"message": "Returned to launch point and landed"})
 
 
 # ── Action dispatcher ────────────────────────────────────────────────
@@ -381,7 +385,18 @@ async def execute_mission_async(mission: dict,
             if repeat_count > 1:
                 print_info(f"\n── Loop {loop + 1}/{repeat_count} ──")
                 audit.record("loop_start", {"loop": loop + 1,
-                                            "of": repeat_count})
+                                            "of": repeat_count,
+                                            "message": f"Starting loop {loop + 1} of {repeat_count}"})
+                
+                # If this is a repeated loop (loop > 0), return to takeoff position first
+                if loop > 0:
+                    print_info("Returning to takeoff position (0, 0) before starting next loop...")
+                    audit.record("loop_reset", {"message": "Returning to takeoff position (0,0) before next loop"})
+                    goto_handler = ACTION_HANDLERS.get("goto")
+                    if goto_handler:
+                        # Use the takeoff altitude if available, else 10m
+                        ret_alt = takeoff_action.get("params", {}).get("altitude_m", 10.0) if takeoff_action else 10.0
+                        await goto_handler(drone, {"north_m": 0.0, "east_m": 0.0, "altitude_m": ret_alt, "speed_mps": 5.0}, audit, telemetry_state=telemetry_state)
 
             for i, action in enumerate(core_actions):
                 action_type = action["type"]

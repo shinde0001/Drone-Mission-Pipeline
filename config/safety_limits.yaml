@@ -1,44 +1,23 @@
-# ============================================================
-# Safety Limits Configuration
-# These values are enforced by the mission_validator BEFORE
-# any commands reach the drone. They act as hard guardrails.
-# ============================================================
-
-# Altitude limits (metres above ground level)
-max_altitude_m: 50
+max_altitude_m: 50.0
 min_altitude_m: 2
-
-# Speed limits (metres per second)
-max_speed_mps: 15
+max_speed_mps: 15.0
 min_speed_mps: 0.5
-
-# Geofence — maximum distance from home/launch position
-geofence_radius_m: 200
-
-# Loiter / hover duration limits (seconds)
+geofence_radius_m: 200.0
 max_loiter_duration_s: 60
 min_loiter_duration_s: 1
-
-# Mission constraints
 max_repeat_count: 10
 max_actions_per_mission: 50
 max_total_distance_m: 5000
-
-# Professional Operator Limits
-max_flight_time_s: 900           # 15 mins battery capacity limit
-max_leg_distance_m: 500          # VLOS (Visual Line of Sight) warning limit
-min_waypoint_spacing_m: 1.0      # Prevent drone flight controller jitter
-low_alt_threshold_m: 5.0         # Below this altitude, enforce stricter speed
-max_speed_at_low_alt_mps: 5.0    # Slower max speed when near the ground
-
-# Allowed action types (whitelist)
+max_flight_time_s: 900.0
+max_leg_distance_m: 500.0
+min_waypoint_spacing_m: 2.0
+low_alt_threshold_m: 5.0
+max_speed_at_low_alt_mps: 5.0
 allowed_actions:
-  - takeoff
-  - goto
-  - loiter
-  - land
-  - return_to_launch
-
-# Mission structure rules
+- takeoff
+- goto
+- loiter
+- land
+- return_to_launch
 require_takeoff_first: true
 require_landing_last: true

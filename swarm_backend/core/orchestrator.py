@@ -21,11 +21,13 @@ class SwarmOrchestrator:
     Main swarm orchestration class that coordinates startup, high-frequency control loops,
     formation geometry, dynamic collision avoidance, safety envelope limits, and mission state transitions.
     """
-    def __init__(self, mission: Mission, vehicle_instances: Optional[Dict[str, Any]] = None):
+    def __init__(self, mission: Mission, vehicle_instances: Optional[Dict[str, Any]] = None, audit: Optional[Any] = None, repeat_count: int = 1):
         self.mission = mission
         self.state_bus = SwarmState()
         self.agents: Dict[str, DroneAgent] = {}
         self.vehicle_instances = vehicle_instances or {}
+        self.audit = audit
+        self.repeat_count = max(1, repeat_count)
         
         self._running = False
         self._control_task = None
@@ -83,6 +85,8 @@ class SwarmOrchestrator:
         try:
             # 1. Arm all vehicles in parallel
             logger.info("Arming all swarm vehicles...")
+            if self.audit:
+                self.audit.record("arm_swarm", {"message": "Arming all swarm vehicles..."})
             await asyncio.gather(*(agent.arm() for agent in self.agents.values()))
 
             # 2. Takeoff sequence (all vehicles in parallel)
@@ -90,6 +94,11 @@ class SwarmOrchestrator:
             takeoff_alt = (takeoff_action.params.get("altitude_m", 10.0) if isinstance(takeoff_action.params, dict) else getattr(takeoff_action.params, "altitude_m", 10.0)) if takeoff_action else 10.0
             
             logger.info(f"Commanding all vehicles to takeoff to {takeoff_alt}m...")
+            if self.audit:
+                self.audit.record("takeoff_swarm", {
+                    "altitude_m": takeoff_alt,
+                    "message": f"Commanding all vehicles to takeoff to {takeoff_alt}m..."
+                })
             await asyncio.gather(*(agent.takeoff(takeoff_alt) for agent in self.agents.values()))
 
             # Wait for all vehicles to reach at least 90% of takeoff altitude
@@ -105,9 +114,13 @@ class SwarmOrchestrator:
                     break
                 await asyncio.sleep(0.1)
             logger.info("All vehicles successfully reached takeoff altitude.")
+            if self.audit:
+                self.audit.record("takeoff_success", {"message": "All vehicles successfully reached takeoff altitude."})
 
             # 3. Enter Offboard mode for all vehicles
             logger.info("Initializing offboard modes...")
+            if self.audit:
+                self.audit.record("offboard_swarm", {"message": "Initializing offboard control modes for all vehicles..."})
             await asyncio.gather(*(agent.start_offboard() for agent in self.agents.values()))
 
             # 4. Start high-frequency follower control loop for formation-tracking followers
@@ -118,21 +131,55 @@ class SwarmOrchestrator:
             if formation_followers:
                 self._control_task = asyncio.create_task(self._follower_control_loop(formation_followers))
 
-            # 5. Execute Leader and Independent Follower Waypoint Actions Concurrently
+            # 5. Execute Leader and Independent Follower Waypoint Actions (repeated)
             leader_id = next(a.id for a in self.mission.agents if a.role == "leader")
             leader_agent = self.agents[leader_id]
 
-            tasks = [self._execute_agent_actions(leader_agent, self.mission.leader_mission.actions, "Leader")]
+            # Filter out takeoff/land from repeatable core actions
+            all_actions = self.mission.leader_mission.actions
+            core_actions = [a for a in all_actions if a.type not in ("takeoff", "land", "return_to_launch")]
 
-            for f_conf in self.mission.agents:
-                if f_conf.role == "leader":
-                    continue
-                if f_conf.independent_actions or self._mode == "INDEPENDENT":
-                    f_agent = self.agents[f_conf.id]
-                    actions = f_conf.independent_actions or self.mission.leader_mission.actions
-                    tasks.append(self._execute_agent_actions(f_agent, actions, f_conf.id.replace("_", " ").title()))
+            for loop in range(self.repeat_count):
+                if not self._running:
+                    break
+                if self.repeat_count > 1:
+                    logger.info(f"── Loop {loop + 1}/{self.repeat_count} ──")
+                    if self.audit:
+                        self.audit.record("loop_start", {
+                            "loop": loop + 1, "of": self.repeat_count,
+                            "message": f"Starting loop {loop + 1} of {self.repeat_count}"
+                        })
 
-            await asyncio.gather(*tasks)
+                    # If this is a repeated loop (loop > 0), return to takeoff position first
+                    if loop > 0:
+                        logger.info("Returning to takeoff position (0, 0) before starting next loop...")
+                        if self.audit:
+                            self.audit.record("loop_reset", {"message": "Returning to takeoff position (0,0) before next loop"})
+                        
+                        from swarm_backend.config.schema import Action as SchemaAction
+                        reset_action = SchemaAction(type="goto", params={"north_m": 0.0, "east_m": 0.0, "altitude_m": takeoff_alt, "speed_mps": 5.0})
+                        
+                        reset_tasks = [self._execute_agent_actions(leader_agent, [reset_action], "Leader")]
+                        for f_conf in self.mission.agents:
+                            if f_conf.role == "leader": continue
+                            if f_conf.independent_actions or self._mode == "INDEPENDENT":
+                                f_agent = self.agents[f_conf.id]
+                                reset_tasks.append(self._execute_agent_actions(f_agent, [reset_action], f_conf.id.replace("_", " ").title()))
+                        await asyncio.gather(*reset_tasks)
+
+                tasks = [self._execute_agent_actions(leader_agent, core_actions, "Leader")]
+
+                for f_conf in self.mission.agents:
+                    if f_conf.role == "leader":
+                        continue
+                    if f_conf.independent_actions or self._mode == "INDEPENDENT":
+                        f_agent = self.agents[f_conf.id]
+                        f_actions = f_conf.independent_actions or core_actions
+                        # Also filter takeoff/land from follower independent actions
+                        f_core = [a for a in f_actions if a.type not in ("takeoff", "land", "return_to_launch")]
+                        tasks.append(self._execute_agent_actions(f_agent, f_core, f_conf.id.replace("_", " ").title()))
+
+                await asyncio.gather(*tasks)
 
             # 6. Land / Return To Launch Sequence
             self._running = False
@@ -148,9 +195,13 @@ class SwarmOrchestrator:
             last_action = self.mission.leader_mission.actions[-1]
             if last_action.type == "return_to_launch":
                 logger.info("Returning all agents to launch...")
+                if self.audit:
+                    self.audit.record("rtl_swarm", {"message": "Returning all agents to launch..."})
                 await asyncio.gather(*(agent.return_to_launch() for agent in self.agents.values()))
             else:
                 logger.info("Landing all agents...")
+                if self.audit:
+                    self.audit.record("land_swarm", {"message": "Landing all agents..."})
                 await asyncio.gather(*(agent.land() for agent in self.agents.values()))
 
             # Wait for disarm
@@ -166,9 +217,13 @@ class SwarmOrchestrator:
                 await asyncio.sleep(0.1)
 
             logger.info("Swarm mission execution completed successfully.")
+            if self.audit:
+                self.audit.record("swarm_success", {"message": "Swarm mission execution completed successfully."})
 
         except Exception as e:
             logger.error(f"Error during orchestrator execution: {e}")
+            if self.audit:
+                self.audit.record("swarm_failure", {"message": f"Error during orchestrator execution: {e}"}, status="error")
             await self.emergency_land()
             raise e
 
@@ -183,11 +238,22 @@ class SwarmOrchestrator:
                 continue
 
             logger.info(f"[{role_name}] starting action {step_idx + 1}/{len(actions)}: {action.type}")
+            params = action.params if isinstance(action.params, dict) else action.params.model_dump()
+            if self.audit:
+                self.audit.record(f"{role_name.lower().replace(' ', '_')}_{action.type}", {
+                    "message": f"[{role_name}] Action {step_idx + 1}/{len(actions)}: {action.type} -> {params}"
+                })
+
             if action.type == "goto":
                 await self._execute_goto(agent, action)
             elif action.type == "loiter":
                 params = action.params if isinstance(action.params, dict) else action.params.model_dump()
-                await asyncio.sleep(params.get("duration_s", 5.0))
+                duration = params.get("duration_s", 5.0)
+                await asyncio.sleep(duration)
+                if self.audit:
+                    self.audit.record(f"{role_name.lower().replace(' ', '_')}_loiter_complete", {
+                        "message": f"[{role_name}] Loiter complete ({duration}s)"
+                    })
             elif action.type == "sweep":
                 from swarm_backend.config.schema import SweepParams, Action as SchemaAction
                 from swarm_backend.core.task_manager import generate_lawn_mower_waypoints
@@ -195,6 +261,10 @@ class SwarmOrchestrator:
                 sweep_params = SweepParams(**params)
                 goto_wpts = generate_lawn_mower_waypoints(sweep_params)
                 logger.info(f"[{role_name}] executing sweep with {len(goto_wpts)} lawn-mower waypoints")
+                if self.audit:
+                    self.audit.record(f"{role_name.lower().replace(' ', '_')}_sweep", {
+                        "message": f"[{role_name}] Starting sweep with {len(goto_wpts)} waypoints"
+                    })
                 for w in goto_wpts:
                     if not self._running:
                         break
@@ -207,6 +277,7 @@ class SwarmOrchestrator:
         target_e = params["east_m"]
         target_d = -params["altitude_m"]
         speed = params.get("speed_mps", 5.0)
+        role_name = agent.agent_id.replace("_", " ").title()
 
         while self._running:
             pos = self.state_bus.get_position(agent.agent_id)
@@ -216,6 +287,10 @@ class SwarmOrchestrator:
             dist = math.sqrt(dn**2 + de**2)
 
             if dist <= WAYPOINT_TOLERANCE_M:
+                if self.audit:
+                    self.audit.record(f"{agent.agent_id}_waypoint_reached", {
+                        "message": f"[{role_name}] Reached waypoint N={target_n:.1f}m E={target_e:.1f}m"
+                    })
                 break
 
             angle = math.atan2(de, dn)

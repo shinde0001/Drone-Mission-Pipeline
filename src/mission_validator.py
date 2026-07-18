@@ -422,8 +422,10 @@ def validate_hardware_safety(mission: dict, telemetry: dict) -> ValidationResult
     limits = load_safety_limits()
     
     # 1. Battery Check
-    bat = telemetry.get("battery_pct", 0)
-    if bat < 30:
+    bat = telemetry.get("battery_pct")
+    if bat is None:
+        result.add_warning("Hardware Safety Advisory: Battery telemetry is not available. Ensure physical battery is fully charged before flight.")
+    elif bat < 30:
         result.add_error(f"Hardware Safety Violation: Battery is dangerously low ({bat}%). Minimum required is 30%.")
     elif bat < 45:
         result.add_warning(f"Hardware Safety: Battery is getting low ({bat}%).")

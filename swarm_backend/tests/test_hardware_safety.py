@@ -89,3 +89,12 @@ def test_hardware_safety_missing_rtl():
     
     assert result.valid is True
     assert any("explicitly end with a return-to-launch" in w.lower() for w in result.warnings)
+
+def test_hardware_safety_no_battery_telemetry():
+    mission = get_base_mission()
+    telemetry = get_base_telemetry()
+    telemetry["battery_pct"] = None
+    result = validate_hardware_safety(mission, telemetry)
+    
+    assert result.valid is True
+    assert any("battery telemetry is not available" in w.lower() for w in result.warnings)

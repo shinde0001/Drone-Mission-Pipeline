@@ -232,7 +232,7 @@ async def connect_drone(port: int, timeout_s: float = 60.0) -> System:
     return drone
 
 
-async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, telemetry_state: dict):
+async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, telemetry_state: dict, drones_dict: dict = None):
     print_info("Starting Real Swarm Execution...")
     audit.record("swarm_start", {"mission_name": mission.get("mission_name", "swarm_mission")})
     
@@ -256,11 +256,29 @@ async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, t
     # Connect to all drones
     try:
         if num_drones > 1:
-            print_info(f"Connecting to {num_drones - 1} wingmen on ports {[14540 + i for i in range(1, num_drones)]}...")
-            wingmen = await asyncio.gather(*(
-                connect_drone(14540 + i) for i in range(1, num_drones)
-            ))
-            drones = [drone] + list(wingmen)
+            wingmen = []
+            for i in range(1, num_drones):
+                if drones_dict:
+                    # Wait for background task to connect the drone
+                    print_info(f"Waiting for wingman {i} to be connected by background manager...")
+                    connected_drone = None
+                    for _ in range(120):  # Wait up to 60 seconds (120 * 0.5s)
+                        if i in drones_dict and drones_dict[i]:
+                            connected_drone = drones_dict[i]
+                            break
+                        await asyncio.sleep(0.5)
+                    
+                    if connected_drone:
+                        print_success(f"Wingman {i} connected (from background manager).")
+                        wingmen.append(connected_drone)
+                    else:
+                        raise RuntimeError(f"Wingman {i} did not connect via background manager within timeout.")
+                else:
+                    # Fallback to connecting directly if drones_dict is not provided
+                    print_info(f"Connecting to wingman {i} on port {14540 + i}...")
+                    wing = await connect_drone(14540 + i)
+                    wingmen.append(wing)
+            drones = [drone] + wingmen
         else:
             drones = [drone]
             wingmen = []
@@ -320,8 +338,11 @@ async def execute_swarm_mission(mission: dict, drone: System, audit: AuditLog, t
             vehicle_instances[f"follower_{i}"] = wing
 
         from swarm_backend.core.orchestrator import SwarmOrchestrator
-        orchestrator = SwarmOrchestrator(mission_obj, vehicle_instances=vehicle_instances)
+        repeat_count = int(mission.get("repeat_count", 1))
+        orchestrator = SwarmOrchestrator(mission_obj, vehicle_instances=vehicle_instances, audit=audit, repeat_count=repeat_count)
         print_info("Initializing SwarmOrchestrator with connected vehicles...")
+        if repeat_count > 1:
+            print_info(f"Mission will repeat core waypoints {repeat_count} times.")
         await orchestrator.initialize()
         print_info("Running unified SwarmOrchestrator control loop...")
         await orchestrator.run()

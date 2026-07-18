@@ -49,7 +49,7 @@ class DroneAgent:
                 if state.is_connected:
                     break
             async for health in self.vehicle.telemetry.health():
-                if health.is_global_position_ok and health.is_home_position_ok:
+                if health.is_global_position_ok and health.is_home_position_ok and health.is_armable:
                     break
 
         await asyncio.wait_for(wait_ready(), timeout=timeout_s)

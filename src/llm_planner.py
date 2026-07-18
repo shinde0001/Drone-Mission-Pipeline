@@ -122,13 +122,22 @@ SYSTEM_PROMPT_SWARM = """You are a drone swarm mission planner AI. Your job is t
 natural-language commands for a squad of {num_drones} drones.
 You must produce a squad-level mission JSON.
 
+## Mission Structure Rules
+1. Every mission MUST start with a "takeoff" action
+2. Every mission MUST end with either "land" or "return_to_launch"
+3. Include at least one "goto" action between takeoff and landing
+4. If the operator says "repeat N times", "do this N times", "loop N times", or similar, set repeat_count=N. Default is 1.
+5. Default altitude: 10m if not specified
+6. Default speed: 5 m/s if not specified
+7. Positions use NED offsets: north_m (positive=north), east_m (positive=east), altitude_m (always positive)
+
 Return ONLY a valid JSON object matching this structure:
 {{
   "mission_name": "<descriptive name>",
   "vehicle_type": "swarm",
   "formation": "<wedge, line, or column>",
   "drone_count": {num_drones},
-  "repeat_count": <repeat count>,
+  "repeat_count": <integer, how many times to repeat the core waypoints, default 1>,
   "actions": [
     {{"type": "takeoff", "params": {{"altitude_m": <altitude>}}}},
     {{"type": "goto", "params": {{"north_m": <n>, "east_m": <e>, "altitude_m": <a>, "speed_mps": <s>}}}},
@@ -317,6 +326,22 @@ def _build_few_shot_messages(system_prompt: str, user_prompt: str, compact: bool
                         {"type": "takeoff", "params": {"altitude_m": 15}},
                         {"type": "goto", "params": {"north_m": 20, "east_m": 10, "altitude_m": 15, "speed_mps": 5}},
                         {"type": "land", "params": {}}
+                    ]
+                })
+            },
+            {
+                "user": f"{num_drones} drones takeoff to 10m, fly north 30m in line formation, do this 3 times then return to launch",
+                "assistant": json.dumps({
+                    "mission_name": f"{num_drones} Drone Line Patrol x3",
+                    "vehicle_type": "swarm",
+                    "formation": "line",
+                    "drone_count": num_drones,
+                    "repeat_count": 3,
+                    "actions": [
+                        {"type": "takeoff", "params": {"altitude_m": 10}},
+                        {"type": "goto", "params": {"north_m": 30, "east_m": 0, "altitude_m": 10, "speed_mps": 5}},
+                        {"type": "goto", "params": {"north_m": 0, "east_m": 0, "altitude_m": 10, "speed_mps": 5}},
+                        {"type": "return_to_launch", "params": {}}
                     ]
                 })
             }
@@ -543,7 +568,34 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
         except Exception as e:
             last_error = e
             if attempt == max_attempts:
-                raise RuntimeError(f"{model_name} API call failed: {e}") from e
+                print_warning(f"LLM API call failed ({e}). Falling back to a predefined safe mission.")
+                logger.warning(f"LLM API call failed ({e}). Falling back to a predefined safe mission.")
+                if mode == "swarm":
+                    return {
+                        "mission_name": "Fallback Swarm Mission",
+                        "vehicle_type": "swarm",
+                        "formation": "wedge",
+                        "drone_count": num_drones,
+                        "repeat_count": 1,
+                        "actions": [
+                            {"type": "takeoff", "params": {"altitude_m": 10.0}},
+                            {"type": "goto", "params": {"north_m": 15.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                            {"type": "goto", "params": {"north_m": 0.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                            {"type": "return_to_launch", "params": {}}
+                        ]
+                    }
+                else:
+                    return {
+                        "mission_name": "Fallback Single Drone Mission",
+                        "vehicle_type": "quadcopter",
+                        "repeat_count": 1,
+                        "actions": [
+                            {"type": "takeoff", "params": {"altitude_m": 10.0}},
+                            {"type": "goto", "params": {"north_m": 15.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                            {"type": "goto", "params": {"north_m": 0.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                            {"type": "return_to_launch", "params": {}}
+                        ]
+                    }
             continue
 
         logger.info(f"Received response from {model_name}")
@@ -556,6 +608,18 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
         # potentially noisy output (small models often add explanatory text)
         mission = _extract_mission_json(raw_content, is_local, mode=mode)
         if mission is not None:
+            # Regex fallback: if LLM returned repeat_count=1 but user clearly asked for repeats
+            if mission.get("repeat_count", 1) <= 1:
+                repeat_match = re.search(
+                    r'(?:repeat|do\s+(?:this|it)|loop)\s+(?:(?:this|it)\s+)?(\d+)\s*(?:times?|x)',
+                    prompt, re.IGNORECASE
+                )
+                if not repeat_match:
+                    repeat_match = re.search(r'(\d+)\s*(?:times?|x)\s*$', prompt, re.IGNORECASE)
+                if repeat_match:
+                    mission["repeat_count"] = int(repeat_match.group(1))
+                    logger.info(f"Overrode repeat_count to {mission['repeat_count']} from user prompt.")
+
             logger.info(
                 f"Mission planned: '{mission.get('mission_name', 'unnamed')}' "
                 f"with {len(mission['actions'])} actions"
@@ -569,7 +633,34 @@ def plan_mission(prompt: str, mode: str = "standard", ai_engine: str = "offline"
         print_warning(f"Attempt {attempt}: Ollama did not return valid mission JSON.")
         print_info(f"Ollama raw response was:\n{raw_content}")
 
-    raise last_error
+    print_warning("LLM returned invalid formatting. Falling back to a predefined safe mission.")
+    logger.warning("LLM returned invalid formatting. Falling back to a predefined safe mission.")
+    if mode == "swarm":
+        return {
+            "mission_name": "Fallback Swarm Mission",
+            "vehicle_type": "swarm",
+            "formation": "wedge",
+            "drone_count": num_drones,
+            "repeat_count": 1,
+            "actions": [
+                {"type": "takeoff", "params": {"altitude_m": 10.0}},
+                {"type": "goto", "params": {"north_m": 15.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                {"type": "goto", "params": {"north_m": 0.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                {"type": "return_to_launch", "params": {}}
+            ]
+        }
+    else:
+        return {
+            "mission_name": "Fallback Single Drone Mission",
+            "vehicle_type": "quadcopter",
+            "repeat_count": 1,
+            "actions": [
+                {"type": "takeoff", "params": {"altitude_m": 10.0}},
+                {"type": "goto", "params": {"north_m": 15.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                {"type": "goto", "params": {"north_m": 0.0, "east_m": 0.0, "altitude_m": 10.0, "speed_mps": 3.0}},
+                {"type": "return_to_launch", "params": {}}
+            ]
+        }
 
 
 def _extract_mission_json(raw_content: str, is_local: bool, mode: str = "standard") -> dict | None:
@@ -1139,11 +1230,25 @@ def plan_swarm_mission(prompt: str, ai_engine: str = "offline", api_key: str = N
             follower_config_compat["follower_2"]["offset_north_m"] = -spacing_m
             follower_config_compat["follower_2"]["offset_east_m"] = spacing_m
 
+    # Extract repeat_count from user prompt (LLMs often miss this)
+    repeat_count = 1
+    repeat_match = re.search(
+        r'(?:repeat|do\s+(?:this|it)|loop)\s+(?:(?:this|it)\s+)?(\d+)\s*(?:times?|x)',
+        prompt, re.IGNORECASE
+    )
+    if not repeat_match:
+        # Also check for "N times" at the end of the prompt
+        repeat_match = re.search(r'(\d+)\s*(?:times?|x)\s*$', prompt, re.IGNORECASE)
+    if repeat_match:
+        repeat_count = int(repeat_match.group(1))
+        logger.info(f"Extracted repeat_count={repeat_count} from user prompt.")
+
     return {
         "mission_id": raw_mission["mission_id"],
         "mission_name": f"Swarm Mission ({mode})",
         "vehicle_type": "swarm",
         "drone_count": num_agents,
+        "repeat_count": repeat_count,
         "formation": raw_mission["formation"],
         "formation_type": formation_type,
         "spacing_m": spacing_m,
