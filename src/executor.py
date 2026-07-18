@@ -74,6 +74,14 @@ async def _execute_takeoff(drone: System, params: dict,
     logger.info(f"Takeoff to {altitude}m")
     audit.record("takeoff", {"altitude_m": altitude, "message": f"Commanding takeoff to {altitude}m"})
 
+    # Transition to HOLD mode first if locked in RTL or LAND to allow takeoff
+    try:
+        print_info("Transitioning to HOLD mode...")
+        await drone.action.hold()
+        print_success("Switched to HOLD mode")
+    except Exception as e:
+        logger.warning(f"Could not transition to HOLD mode: {e}")
+
     # Arm the drone
     print_info("Arming drone...")
     await drone.action.arm()

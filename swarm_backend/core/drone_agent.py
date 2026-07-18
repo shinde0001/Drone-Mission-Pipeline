@@ -100,6 +100,11 @@ class DroneAgent:
     async def arm(self) -> None:
         """Arm the vehicle."""
         logger.info(f"Arming {self.agent_id}")
+        try:
+            logger.info(f"Transitioning {self.agent_id} to HOLD mode before arming...")
+            await self.vehicle.action.hold()
+        except Exception as e:
+            logger.warning(f"Could not transition {self.agent_id} to HOLD: {e}")
         await self.vehicle.action.arm()
 
     async def disarm(self) -> None:
