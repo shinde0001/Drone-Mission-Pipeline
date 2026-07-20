@@ -181,3 +181,5 @@ The project includes an exhaustive automated unit and integration test suite cov
 # Run all tests (Schema, Parser, Formation Math, Safety Envelope, Collision Avoidance, Orchestrator, E2E Pipeline)
 python3 -m pytest -p no:anyio swarm_backend/tests/
 ```
+
+https://github.com/user-attachments/assets/67e0a0c9-5eaa-440c-b109-2060fb4fa07c
