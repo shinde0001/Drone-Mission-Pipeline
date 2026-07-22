@@ -1,4 +1,4 @@
-# 🚁 System Workflow for Drone Pipeline and Multi-Agent Mission Generation
+# 🚁 System Workflow for Drone Pipeline and Multi-Agent Mission Generation (Swarm Coordinator)
 
 [![Python Version](https://img.shields.io/badge/Python-3.8%2B-blue.svg)](https://python.org)
 [![PX4 Autopilot](https://img.shields.io/badge/PX4-SITL%201.14+-orange.svg)](https://px4.io/)
